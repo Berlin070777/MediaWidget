@@ -31,6 +31,11 @@ final class MediaMonitor: ObservableObject {
     /// Whether the monitor is actively listening for changes.
     @Published var isMonitoring: Bool = false
 
+    /// Human-readable label of the source that produced the current snapshot.
+    /// MediaRemote is unusable on recent macOS releases, so this tells the user
+    /// which fallback is in charge.
+    @Published var activeSourceLabel: String = "—"
+
     // MARK: Internal Properties
 
     /// Bridge to the MediaRemote private framework. `nil` if the framework could not be loaded.
@@ -110,7 +115,11 @@ final class MediaMonitor: ObservableObject {
             observers.append(observer)
         }
 
-        // 3. Do the initial fetch.
+        // 3. MediaRemote no longer delivers now-playing notifications on recent macOS
+        //    releases, so poll the fallback sources on a timer as well.
+        startRefreshTimer()
+
+        // 4. Do the initial fetch.
         refreshNowPlaying()
     }
 
@@ -130,8 +139,8 @@ final class MediaMonitor: ObservableObject {
     /// Manually trigger a refresh of the now-playing state.
     func refreshNowPlaying() {
         guard let bridge else {
-            currentMedia = .empty
-            allSources = []
+            // No MediaRemote at all – go straight to the per-app fallback sources.
+            resolveFallback()
             return
         }
 
@@ -161,20 +170,17 @@ final class MediaMonitor: ObservableObject {
 
                                 // Demo mode overrides real state so the UI can be previewed.
                                 if self.isDemoModeEnabled {
-                                    mediaInfo = .demo
+                                    self.applyMediaInfo(.demo)
+                                    return
                                 }
 
-                                self.currentMedia = mediaInfo
-                                self.allSources = mediaInfo.isEmpty ? [] : [mediaInfo]
-
-                                // Persist to shared defaults so the Widget can read it.
-                                self.sharedDefaults.save(mediaInfo: mediaInfo)
-
-                                // Manage the refresh timer based on playback state.
-                                if mediaInfo.isPlaying {
-                                    self.startRefreshTimer()
+                                if mediaInfo.isEmpty {
+                                    // MediaRemote returned nothing – fall back to the
+                                    // per-app sources (AppleScript players / NeteaseMusic).
+                                    self.resolveFallback()
                                 } else {
-                                    self.stopRefreshTimer()
+                                    self.activeSourceLabel = "MediaRemote"
+                                    self.applyMediaInfo(mediaInfo)
                                 }
                             }
                         }
@@ -182,6 +188,75 @@ final class MediaMonitor: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Fallback Sources
+
+    /// Resolves now-playing state from non-MediaRemote sources.
+    ///
+    /// Priority: a *playing* source always wins over a paused one, so a paused
+    /// Music.app never masks a track that NeteaseMusic is actually playing.
+    private func resolveFallback() {
+        // AppleScript must run on the main thread; the SQLite read is cheap enough
+        // to do inline.
+        let scripting = ScriptingPlayerSource.currentSnapshot()
+        let netease = NeteaseMusicSource.isAppRunning ? NeteaseMusicSource.currentTrack() : nil
+
+        if let scripting, scripting.isPlaying {
+            applyScripting(scripting)
+        } else if let netease, netease.isPlaying {
+            applyNetease(netease)
+        } else if let scripting {
+            applyScripting(scripting)
+        } else if let netease {
+            applyNetease(netease)
+        } else {
+            activeSourceLabel = "—"
+            applyMediaInfo(.empty)
+        }
+    }
+
+    /// Applies a snapshot from a scriptable player, fetching artwork when needed.
+    private func applyScripting(_ snapshot: ScriptingPlayerSource.Snapshot) {
+        activeSourceLabel = "AppleScript · Music / Spotify"
+        let artworkKey = snapshot.artworkURL?.lastPathComponent
+        let artwork = artworkKey.flatMap { ArtworkCache.cachedData(for: $0) }
+        applyMediaInfo(snapshot.makeMediaInfo(artwork: artwork))
+
+        guard artwork == nil, let artworkKey, let url = snapshot.artworkURL else { return }
+        ArtworkCache.load(url: url, key: artworkKey) { [weak self] data in
+            guard data != nil else { return }
+            Task { @MainActor [weak self] in
+                self?.refreshNowPlaying()
+            }
+        }
+    }
+
+    /// Applies a track read from NeteaseMusic's history, fetching artwork when needed.
+    private func applyNetease(_ track: NeteaseMusicSource.Track) {
+        activeSourceLabel = "网易云音乐 · 本地播放记录"
+        let artwork = ArtworkCache.cachedData(for: track.cacheKey)
+        applyMediaInfo(track.makeMediaInfo(artwork: artwork))
+
+        guard artwork == nil, let url = track.artworkURL else { return }
+        ArtworkCache.load(url: url, key: track.cacheKey) { [weak self] data in
+            guard data != nil else { return }
+            Task { @MainActor [weak self] in
+                self?.refreshNowPlaying()
+            }
+        }
+    }
+
+    /// Applies a media snapshot to the published state and the shared store.
+    private func applyMediaInfo(_ mediaInfo: MediaInfo) {
+        guard currentMedia != mediaInfo else { return }
+
+        currentMedia = mediaInfo
+        allSources = mediaInfo.isEmpty ? [] : [mediaInfo]
+
+        // Persist to shared storage so the widget extension can read it.
+        sharedDefaults.save(mediaInfo: mediaInfo)
+        sharedDefaults.requestWidgetReload()
     }
 
     // MARK: - Timer Management

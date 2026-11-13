@@ -82,6 +82,14 @@ struct SettingsView: View {
                     okText: "是",
                     failText: "否"
                 )
+                HStack {
+                    Text("当前数据源")
+                    Spacer()
+                    Text(monitor.activeSourceLabel)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+
                 statusRow(
                     "后台共享存储",
                     ok: AppGroupStatus.isAvailable,

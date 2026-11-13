@@ -19,22 +19,29 @@
 | 菜单栏常驻 | `MenuBarExtra` 弹出面板，图标随播放状态变化 | ✅ |
 | 播放信息展示 | 标题 / 艺术家 / 专辑 / 封面 / 进度 / 音量 | ✅ |
 | 播放控制 | 播放·暂停 / 上一曲 / 下一曲 / 拖动进度 / 音量±/静音 | ✅ |
-| 悬浮面板 | `⌘⇧M` 呼出毛玻璃浮动窗口，置顶所有空间，可拖动 | ✅ |
+| 悬浮面板 | `⌘⇧M` 呼出毛玻璃浮动窗口，原生红绿灯（可关闭/最小化/缩放）、置顶所有空间、可拖动 | ✅ |
+| 多数据源检测 | MediaRemote → AppleScript（Music/Spotify）→ 网易云本地记录，逐级兜底 | ✅ |
 | 桌面小组件 | WidgetKit，支持 `.systemSmall / .systemMedium / .systemLarge`，带 AppIntent 控制按钮 | ✅ |
 | 设置面板 | 开机自启（`SMAppService`）、Dock 显示、快捷键、运行状态诊断 | ✅ |
 | 演示模式 | 无播放器时用示例曲目预览完整 UI（设置内开关） | ✅ |
-| 多音源切换 UI | `MediaMonitor.allSources` 已采集，UI 待做 | 🚧 |
+| 多音源切换 UI | 多个播放器同时在播时自动择「正在播放」者，手动切换 UI 待做 | 🚧 |
 | 主题 / 封面开关 | 常量与 Key 已预留 | 🚧 |
 
 ### 已知支持的应用
 
-通过 MediaRemote 读取**系统级** Now Playing，理论上覆盖所有向系统注册的播放器：
+### 数据来源（重要）
 
-- Apple Music、Spotify、网易云音乐、QQ 音乐
-- IINA、VLC、哔哩哔哩
-- Safari / Chrome 网页播放
+**macOS 15.4 起，第三方 App 已无法通过 `MRMediaRemoteGetNowPlayingInfo` 读取「正在播放」**
+（本项目在 macOS 26.2 上实测：即使使用真实开发者证书签名，该 API 对任何播放器都返回空）。
+因此本项目按下列顺序解析当前播放状态：
 
-网易云音乐额外用 AppleScript 菜单点击作为兜底（MediaRemote 指令失败时）。
+| 优先级 | 数据源 | 覆盖 | 说明 |
+|---|---|---|---|
+| 1 | `MediaRemote` | 全系统 | 老系统 / 有权限时可用，读不到就自动降级 |
+| 2 | `ScriptingPlayerSource` | Apple Music、Spotify | AppleScript 读取，含精确播放进度；首次会请求「自动化」权限 |
+| 3 | `NeteaseMusicSource` | 网易云音乐 | 读取其本地 SQLite 播放历史（曲名/歌手/专辑/时长/封面），进度按起播时间推算 |
+
+「正在播放」的播放器永远优先于「已暂停」的播放器，所以暂停的 Music 不会盖住正在播的网易云。
 
 ---
 
@@ -97,10 +104,15 @@ MediaWidget/
 3. **WidgetKit 扩展的 Info.plist 必须手写**
    `NSExtension → NSExtensionPointIdentifier = com.apple.widgetkit-extension` 无法用 `INFOPLIST_KEY_*` 表达，所以该 target 关闭 `GENERATE_INFOPLIST_FILE`。
 
-4. **时间戳校正**
+4. **网易云音乐检测**
+   NeteaseMusic 3.x 既不向 MediaRemote 暴露信息，其 Chromium 界面也没有可访问的 AX 树。但它把播放历史写在
+   `~/Library/Containers/com.netease.163music/Data/Documents/storage/sqlite_storage.sqlite3` 的
+   `historyTracks` 表里（`playtime` + 完整曲目 JSON），本项目直读该表并在本地缓存封面。
+
+5. **时间戳校正**
    播放进度用 `positionTimestamp` + `playbackRate` 外推，避免每秒轮询；仅在播放中启用 5 秒刷新定时器。
 
-5. **Swift 6 严格并发**
+6. **Swift 6 严格并发**
    `MediaMonitor` 为 `@MainActor` 单例；`MediaRemoteBridge` 为 `@unchecked Sendable`（初始化后函数指针不可变）；Carbon 回调内用 `MainActor.assumeIsolated`。
 
 ---
@@ -146,6 +158,7 @@ cp -R ~/Library/Developer/Xcode/DerivedData/MediaWidget-*/Build/Products/Release
 |---|---|
 | 点击菜单栏图标 | 打开控制面板 |
 | `⌘ ⇧ M` | 显示 / 隐藏悬浮面板（全局生效） |
+| 悬浮面板左上角红绿灯 | 原生 macOS 关闭 / 最小化 / 缩放（关闭只是隐藏，`⌘⇧M` 可再唤出） |
 | 面板右上角 ⚙️ | 打开设置 |
 | 设置 → 演示模式 | 无播放器时预览完整 UI（示例曲目） |
 
@@ -187,6 +200,7 @@ plutil -p ~/Library/Containers/com.mediawidget.app.widget/Data/Library/Applicati
 | 限制 | 说明 |
 |---|---|
 | 不能上架 App Store | 使用私有框架 `MediaRemote`，不受 Apple 支持，系统更新可能导致失效 |
+| 首次读取 Music/Spotify 会弹「自动化」权限 | 允许后即可精确读取播放进度；拒绝则只能检测网易云 |
 | 小组件需手动添加 | WidgetKit 不允许程序化把小组件放到桌面，首次需按上文手动拖入 |
 | ad-hoc 签名无 App Group | 走沙盒容器文件共享；换成正式签名后自动切换到 App Group |
 | 多音源切换未做 UI | `allSources` 已采集，UI 待实现 |
@@ -201,6 +215,8 @@ plutil -p ~/Library/Containers/com.mediawidget.app.widget/Data/Library/Applicati
 - [x] 无 App Group 时的跨进程数据共享
 - [x] `.systemSmall` 紧凑小组件
 - [x] 开机自启改用 `SMAppService`
+- [x] MediaRemote 失效后的多数据源兜底（AppleScript + 网易云本地记录）
+- [x] 悬浮面板原生红绿灯
 - [ ] 多音源切换 UI
 - [ ] 主题与封面显示开关落库
 - [ ] 歌词 / 音频可视化

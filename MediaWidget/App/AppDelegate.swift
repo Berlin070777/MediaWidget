@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Application delegate that owns the global hot key and the floating control panel.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The floating panel, created lazily on first use.
     private var floatingPanel: NSPanel?
 
@@ -145,10 +145,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         floatingPanel?.orderOut(nil)
     }
 
+    // MARK: - NSWindowDelegate
+
+    /// The red traffic light hides the panel instead of tearing it down, so the
+    /// next ⌘⇧M brings back the very same window.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
     private func makeFloatingPanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 300),
-            styleMask: [.nonactivatingPanel, .titled, .closable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 370),
+            // Native macOS traffic lights (close / miniaturize / zoom).
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -157,10 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isFloatingPanel = true
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
-        // The panel has its own close button in the SwiftUI header.
-        for button in [NSWindow.ButtonType.closeButton, .zoomButton, .miniaturizeButton] {
-            panel.standardWindowButton(button)?.isHidden = true
-        }
+        panel.standardWindowButton(.closeButton)?.isHidden = false
+        panel.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        panel.standardWindowButton(.zoomButton)?.isHidden = false
+        panel.minSize = NSSize(width: 320, height: 300)
+        panel.delegate = self
         panel.isMovableByWindowBackground = true
         panel.isOpaque = false
         panel.backgroundColor = .clear

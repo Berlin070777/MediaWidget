@@ -34,8 +34,9 @@ struct FloatingPanelView: View {
                 openAppButton
             }
         }
-        .padding(18)
-        .frame(width: 340)
+        // Leave room for the native traffic lights in the title bar.
+        .padding(EdgeInsets(top: 32, leading: 18, bottom: 18, trailing: 18))
+        .frame(minWidth: 320, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
         .onAppear(perform: syncSystemAudio)
     }
 
@@ -56,16 +57,6 @@ struct FloatingPanelView: View {
             Circle()
                 .fill(media.isPlaying ? Color.green : Color.secondary.opacity(0.35))
                 .frame(width: 6, height: 6)
-
-            Button {
-                (NSApp.delegate as? AppDelegate)?.hideFloatingPanel()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-            }
-            .buttonStyle(.plain)
-            .help("关闭面板（⌘⇧M）")
 
             Button {
                 NSApp.activate(ignoringOtherApps: true)
