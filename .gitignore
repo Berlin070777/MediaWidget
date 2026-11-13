@@ -1,0 +1,99 @@
+# ---------------------------------------------
+# macOS
+# ---------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+ehthumbs.db
+Thumbs.db
+__MACOSX/
+
+# ---------------------------------------------
+# Xcode / XcodeGen
+# ---------------------------------------------
+# The .xcodeproj is generated from project.yml by XcodeGen.
+# Do NOT commit it — regenerate with:  xcodegen generate
+*.xcodeproj/
+*.xcworkspace/
+
+# Build products
+build/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.xcarchive
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (unused, kept for safety)
+Pods/
+Carthage/Build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Dependency managers / caches
+vendor/
+.gradle/
+node_modules/
+
+# ---------------------------------------------
+# Secrets & local config
+# ---------------------------------------------
+*.env
+.env.*
+!.env.example
+secrets/
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.keystore
+*.jks
+*.p8
+*.pem
+*.key
+!**/Assets.xcassets/**/*.json
+
+# ---------------------------------------------
+# Editors / OS junk
+# ---------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+.codex/
+.cursor/
+.fleet/
+*.log
