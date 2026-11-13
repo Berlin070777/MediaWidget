@@ -13,6 +13,10 @@ enum Constants {
     /// The App Group identifier used for sharing data between app and widget.
     static let appGroupID = "group.com.mediawidget.shared"
 
+    /// Bundle identifier of the widget extension. Used to locate its sandbox
+    /// container when no App Group is configured.
+    static let widgetBundleID = "com.mediawidget.app.widget"
+
     // MARK: - Widget Kinds
 
     /// Widget kind identifiers.

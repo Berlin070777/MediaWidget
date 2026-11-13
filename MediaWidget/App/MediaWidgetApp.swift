@@ -8,7 +8,7 @@ import SwiftUI
 @main
 struct MediaWidgetApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var mediaMonitor = MediaMonitor()
+    @StateObject private var mediaMonitor = MediaMonitor.shared
 
     var body: some Scene {
         MenuBarExtra {

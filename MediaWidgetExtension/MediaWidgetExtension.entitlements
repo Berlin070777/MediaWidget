@@ -2,11 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-    <key>com.apple.security.application-groups</key>
-    <array>
-        <string>group.com.mediawidget.shared</string>
-    </array>
+	<!-- WidgetKit 要求扩展必须沙盒化，否则 PlugInKit 会拒绝注册
+	     （"plug-ins must be sandboxed"）。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- 沙盒下唯一能读到的位置是自己的容器。主 App 未沙盒化，可以直接写入
+	     该容器的 Application Support 目录，从而在不配置 App Group 的情况下
+	     实现数据共享（见 SharedDefaults.fallbackFileURL）。 -->
+
+	<!-- 有开发者团队时启用以下配置即可走标准 App Group： -->
+	<!--
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.mediawidget.shared</string>
+	</array>
+	-->
 </dict>
 </plist>

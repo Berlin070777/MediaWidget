@@ -2,11 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-    <key>com.apple.security.application-groups</key>
-    <array>
-        <string>group.com.mediawidget.shared</string>
-    </array>
+	<!-- 本地开发使用 ad-hoc 签名（CODE_SIGN_IDENTITY = "-"），
+	     无法携带 App Group entitlement（需要 provisioning profile）。
+	     此状态下 SharedDefaults 会自动回退到
+	     ~/Library/Application Support/MediaWidget/SharedState.plist 与小组件共享数据。
+
+	     发布/上架前：填入 DEVELOPMENT_TEAM，并取消下面 application-groups 的注释。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!--
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.mediawidget.shared</string>
+	</array>
+	-->
 </dict>
 </plist>

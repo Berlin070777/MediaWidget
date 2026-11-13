@@ -14,6 +14,12 @@ import Combine
 @MainActor
 final class MediaMonitor: ObservableObject {
 
+    // MARK: Shared Instance
+
+    /// The single monitor shared by the menu bar UI, the floating panel and the app delegate.
+    /// Creating several instances would register duplicate MediaRemote observers.
+    static let shared = MediaMonitor()
+
     // MARK: Published State
 
     /// The currently active media item, or `.empty` if nothing is playing.
@@ -44,6 +50,13 @@ final class MediaMonitor: ObservableObject {
     /// The interval (in seconds) at which elapsed time is refreshed during playback.
     private let refreshInterval: TimeInterval = 5.0
 
+    /// Whether demo mode is active. When enabled, the UI shows a sample track so
+    /// the interface can be inspected without a real player running.
+    /// Toggle with: `defaults write com.mediawidget.app demoMode -bool YES`
+    var isDemoModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "demoMode")
+    }
+
     // MARK: - Initializer
 
     init() {
@@ -56,13 +69,9 @@ final class MediaMonitor: ObservableObject {
         }
     }
 
-    deinit {
-        let obs = observers
-        for observer in obs {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        refreshTimer?.invalidate()
-    }
+    // No `deinit`: `MediaMonitor` is `@MainActor`-isolated and lives for the whole app
+    // lifetime. Notification observers and the refresh timer are torn down by
+    // `stopMonitoring()`, which is called from `shutdown()` on app termination.
 
     // MARK: - Public API
 
@@ -139,7 +148,7 @@ final class MediaMonitor: ObservableObject {
                             Task { @MainActor [weak self] in
                                 guard let self else { return }
 
-                                let mediaInfo: MediaInfo
+                                var mediaInfo: MediaInfo
                                 if !info.isEmpty {
                                     mediaInfo = self.convertToMediaInfo(
                                         from: info,
@@ -148,6 +157,11 @@ final class MediaMonitor: ObservableObject {
                                     )
                                 } else {
                                     mediaInfo = .empty
+                                }
+
+                                // Demo mode overrides real state so the UI can be previewed.
+                                if self.isDemoModeEnabled {
+                                    mediaInfo = .demo
                                 }
 
                                 self.currentMedia = mediaInfo

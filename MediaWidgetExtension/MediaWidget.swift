@@ -73,7 +73,7 @@ struct MediaWidget: Widget {
         }
         .configurationDisplayName("媒体控制")
         .description("显示当前播放的媒体信息和控制按钮")
-        .supportedFamilies([.systemMedium, .systemLarge])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 

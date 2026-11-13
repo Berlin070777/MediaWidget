@@ -8,17 +8,28 @@ import SwiftUI
 struct MenuBarView: View {
     @ObservedObject var monitor: MediaMonitor
 
-    private var media: MediaInfo {
-        monitor.currentMedia
-    }
+    /// System volume is read through `osascript`, which is slow (~50 ms).
+    /// Cache it in `@State` and refresh only when something actually changed.
+    @State private var systemVolume: Int = 50
+    @State private var isMuted: Bool = false
+
+    private var media: MediaInfo { monitor.currentMedia }
+
+    private var controller: MediaController { MediaController(bridge: monitor.bridge) }
 
     var body: some View {
         VStack(spacing: 12) {
             headerSection
             Divider()
-            mediaInfoSection
-            progressSection
-            controlsSection
+
+            if media.isEmpty {
+                emptyStateSection
+            } else {
+                mediaInfoSection
+                progressSection
+                controlsSection
+            }
+
             volumeSection
             Divider()
             footerSection
@@ -27,24 +38,49 @@ struct MenuBarView: View {
         .frame(width: 300)
         .onAppear {
             monitor.startMonitoring()
+            refreshSystemAudio()
         }
     }
 
     // MARK: - Header
 
     private var headerSection: some View {
-        HStack {
-            Image(systemName: media.sourceAppInfo.symbolName)
-                .font(.system(size: 14))
+        HStack(spacing: 6) {
+            Image(systemName: media.isEmpty ? "hifispeaker" : media.sourceAppInfo.symbolName)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text(media.isEmpty ? "未连接" : media.sourceName)
+
+            Text(media.isEmpty ? "未连接播放源" : media.sourceName)
                 .font(.headline)
                 .lineLimit(1)
+
             Spacer()
+
             Circle()
-                .fill(media.isPlaying ? Color.green : Color.secondary.opacity(0.4))
+                .fill(media.isPlaying ? Color.green : Color.secondary.opacity(0.35))
                 .frame(width: 8, height: 8)
+                .help(media.isPlaying ? "正在播放" : "已暂停")
         }
+    }
+
+    // MARK: - Empty state
+
+    private var emptyStateSection: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text("打开任意播放器开始播放")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            if monitor.bridge == nil {
+                Text("MediaRemote 未加载，播放信息不可用")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Media Info
@@ -53,7 +89,7 @@ struct MenuBarView: View {
         HStack(spacing: 12) {
             ArtworkView(data: media.artworkData, size: 56)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(media.title)
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
@@ -103,93 +139,88 @@ struct MenuBarView: View {
     // MARK: - Controls
 
     private var controlsSection: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 26) {
             Spacer()
-            Button {
+
+            controlButton("backward.fill", size: 18, enabled: media.capabilities.canSkipPrevious) {
                 controller.previousTrack()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    monitor.refreshNowPlaying()
-                }
-            } label: {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 18))
+                resync(after: 0.5)
             }
-            .buttonStyle(.plain)
 
             Button {
                 controller.togglePlayPause()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    monitor.refreshNowPlaying()
-                }
+                resync(after: 0.3)
             } label: {
                 Image(systemName: media.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 32))
             }
             .buttonStyle(.plain)
+            .disabled(!media.capabilities.canTogglePlayPause)
 
-            Button {
+            controlButton("forward.fill", size: 18, enabled: media.capabilities.canSkipNext) {
                 controller.nextTrack()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    monitor.refreshNowPlaying()
-                }
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 18))
+                resync(after: 0.5)
             }
-            .buttonStyle(.plain)
 
             Spacer()
         }
+    }
+
+    private func controlButton(
+        _ symbol: String,
+        size: CGFloat,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+                .foregroundStyle(enabled ? .primary : .tertiary)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     // MARK: - Volume
 
     private var volumeSection: some View {
         HStack(spacing: 8) {
-            let vol = controller.getSystemVolume()
-            let muted = controller.isMuted()
-
             Button {
                 controller.toggleMute()
+                refreshSystemAudio()
             } label: {
-                Image(systemName: muted ? "speaker.slash.fill" : volumeIcon(for: vol))
+                Image(systemName: isMuted ? "speaker.slash.fill" : volumeIcon(for: systemVolume))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
             }
             .buttonStyle(.plain)
+            .help(isMuted ? "取消静音" : "静音")
 
-            Text("\(muted ? 0 : vol)%")
+            Text("\(isMuted ? 0 : systemVolume)%")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .frame(width: 36, alignment: .trailing)
+                .frame(width: 36, alignment: .leading)
 
-            Spacer()
-
-            Button {
-                controller.setSystemVolume(max(0, controller.getSystemVolume() - 10))
-            } label: {
-                Image(systemName: "minus")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                controller.setSystemVolume(min(100, controller.getSystemVolume() + 10))
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+            Slider(
+                value: Binding(
+                    get: { Double(isMuted ? 0 : systemVolume) },
+                    set: { newValue in
+                        systemVolume = Int(newValue)
+                        isMuted = false
+                        controller.setSystemVolume(Int(newValue))
+                    }
+                ),
+                in: 0...100
+            )
+            .controlSize(.mini)
         }
     }
 
     // MARK: - Footer
 
     private var footerSection: some View {
-        HStack {
+        HStack(spacing: 12) {
             if !media.isEmpty {
                 Button {
                     controller.activateApp(bundleID: media.sourceID)
@@ -201,11 +232,18 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
             }
 
+            Button {
+                (NSApp.delegate as? AppDelegate)?.presentFloatingPanel()
+            } label: {
+                Label("面板", systemImage: "macwindow.on.rectangle")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+
             Spacer()
 
-            Button {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            } label: {
+            SettingsLink {
                 Label("设置", systemImage: "gear")
                     .font(.system(size: 12))
             }
@@ -225,16 +263,25 @@ struct MenuBarView: View {
 
     // MARK: - Helpers
 
-    private var controller: MediaController {
-        MediaController(bridge: monitor.bridge)
+    /// Refreshes MediaRemote state shortly after a command so the UI shows the result.
+    private func resync(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            monitor.refreshNowPlaying()
+        }
+    }
+
+    private func refreshSystemAudio() {
+        let c = controller
+        systemVolume = c.getSystemVolume()
+        isMuted = c.isMuted()
     }
 
     private func volumeIcon(for vol: Int) -> String {
         switch vol {
-        case 0:     return "speaker.slash.fill"
-        case 1..<33: return "speaker.wave.1.fill"
-        case 33..<66: return "speaker.wave.2.fill"
-        default:    return "speaker.wave.3.fill"
+        case 0:        return "speaker.fill"
+        case 1..<33:   return "speaker.wave.1.fill"
+        case 33..<66:  return "speaker.wave.2.fill"
+        default:       return "speaker.wave.3.fill"
         }
     }
 }
@@ -247,23 +294,20 @@ struct ArtworkView: View {
 
     var body: some View {
         Group {
-            if let data = data, let nsImage = NSImage(data: data) {
+            if let data, let nsImage = NSImage(data: data) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
                 LinearGradient(
-                    colors: [
-                        Color.accentColor.opacity(0.6),
-                        Color.accentColor.opacity(0.3),
-                    ],
+                    colors: [Color.accentColor.opacity(0.65), Color.accentColor.opacity(0.28)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
                 .overlay {
                     Image(systemName: "music.note")
                         .font(.system(size: size * 0.35))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
             }
         }

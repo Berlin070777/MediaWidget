@@ -44,8 +44,8 @@ private func sendMediaRemoteCommand(_ commandValue: UInt32) {
 // MARK: - Toggle Play/Pause Intent
 
 struct TogglePlayPauseIntent: AppIntent {
-    static var title: LocalizedStringResource = "播放/暂停"
-    static var description: IntentDescription = IntentDescription("切换播放/暂停状态")
+    static let title: LocalizedStringResource = "播放/暂停"
+    static let description: IntentDescription = IntentDescription("切换播放/暂停状态")
 
     func perform() async throws -> some IntentResult {
         sendMediaRemoteCommand(Constants.MediaRemoteCommand.togglePlayPause)
@@ -56,8 +56,8 @@ struct TogglePlayPauseIntent: AppIntent {
 // MARK: - Next Track Intent
 
 struct NextTrackIntent: AppIntent {
-    static var title: LocalizedStringResource = "下一曲"
-    static var description: IntentDescription = IntentDescription("跳到下一首曲目")
+    static let title: LocalizedStringResource = "下一曲"
+    static let description: IntentDescription = IntentDescription("跳到下一首曲目")
 
     func perform() async throws -> some IntentResult {
         sendMediaRemoteCommand(Constants.MediaRemoteCommand.nextTrack)
@@ -68,8 +68,8 @@ struct NextTrackIntent: AppIntent {
 // MARK: - Previous Track Intent
 
 struct PreviousTrackIntent: AppIntent {
-    static var title: LocalizedStringResource = "上一曲"
-    static var description: IntentDescription = IntentDescription("跳到上一首曲目")
+    static let title: LocalizedStringResource = "上一曲"
+    static let description: IntentDescription = IntentDescription("跳到上一首曲目")
 
     func perform() async throws -> some IntentResult {
         sendMediaRemoteCommand(Constants.MediaRemoteCommand.previousTrack)
@@ -80,9 +80,9 @@ struct PreviousTrackIntent: AppIntent {
 // MARK: - Open Source App Intent
 
 struct OpenSourceAppIntent: AppIntent {
-    static var title: LocalizedStringResource = "打开来源应用"
-    static var description: IntentDescription = IntentDescription("打开正在播放媒体的应用")
-    static var openAppWhenRun: Bool = false
+    static let title: LocalizedStringResource = "打开来源应用"
+    static let description: IntentDescription = IntentDescription("打开正在播放媒体的应用")
+    static let openAppWhenRun: Bool = false
 
     @Parameter(title: "Bundle ID")
     var bundleID: String

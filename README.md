@@ -2,9 +2,13 @@
 
 > 一个常驻 macOS 菜单栏 / 桌面的流媒体播放状态小组件 —— 实时显示当前在播内容，并提供播放控制。
 
-基于 **SwiftUI + WidgetKit + MediaRemote**，通过私有框架读取系统「正在播放」信息，用 App Group 在主 App 与 Widget 扩展之间共享数据。
+基于 **SwiftUI + WidgetKit + MediaRemote**，通过私有框架读取系统「正在播放」信息，在主 App 与 Widget 扩展之间共享状态。
 
-> ⚠️ 项目仍在开发中，当前状态见 [已知问题](#-已知问题)。
+当前状态：**可编译、可运行**（Xcode 26.2 / Swift 6 严格并发，macOS 14.0+）。
+
+| 悬浮控制面板（⌘⇧M） | 设置面板 |
+|---|---|
+| ![悬浮面板](docs/floating-panel.png) | ![设置](docs/settings.png) |
 
 ---
 
@@ -12,38 +16,38 @@
 
 | 模块 | 说明 | 状态 |
 |---|---|---|
-| 菜单栏常驻 | `MenuBarExtra` 弹出面板，图标随播放状态变化（`play.fill` / `play`） | ✅ 已实现 |
-| 播放信息展示 | 标题 / 艺术家 / 专辑 / 封面 / 进度 / 音量 | ✅ 已实现 |
-| 播放控制 | 播放·暂停 / 上一曲 / 下一曲 / 拖动进度 / 音量 | ✅ 已实现 |
-| 悬浮面板 | 全局快捷键 `⌘⇧M` 呼出无边框毛玻璃浮动窗口，可置顶所有空间 | ✅ 已实现 |
-| 桌面小组件 | WidgetKit 中小/大尺寸，展示当前媒体并提供 AppIntent 控制按钮 | ✅ 已实现 |
-| 设置项 | 开机启动、Dock 显示、快捷键说明、框架加载状态 | ✅ 已实现 |
-| 多音源切换 | `allSources` 数据已采集 | 🚧 待做 UI |
-| 自定义主题 / 封面开关 | 常量与 Key 已预留 | 🚧 待做 |
+| 菜单栏常驻 | `MenuBarExtra` 弹出面板，图标随播放状态变化 | ✅ |
+| 播放信息展示 | 标题 / 艺术家 / 专辑 / 封面 / 进度 / 音量 | ✅ |
+| 播放控制 | 播放·暂停 / 上一曲 / 下一曲 / 拖动进度 / 音量±/静音 | ✅ |
+| 悬浮面板 | `⌘⇧M` 呼出毛玻璃浮动窗口，置顶所有空间，可拖动 | ✅ |
+| 桌面小组件 | WidgetKit，支持 `.systemSmall / .systemMedium / .systemLarge`，带 AppIntent 控制按钮 | ✅ |
+| 设置面板 | 开机自启（`SMAppService`）、Dock 显示、快捷键、运行状态诊断 | ✅ |
+| 演示模式 | 无播放器时用示例曲目预览完整 UI（设置内开关） | ✅ |
+| 多音源切换 UI | `MediaMonitor.allSources` 已采集，UI 待做 | 🚧 |
+| 主题 / 封面开关 | 常量与 Key 已预留 | 🚧 |
 
 ### 已知支持的应用
 
 通过 MediaRemote 读取**系统级** Now Playing，理论上覆盖所有向系统注册的播放器：
 
-- Apple Music、Spotify、IINA、VLC
-- 网易云音乐（额外用 AppleScript 菜单点击作为兜底）
-- QQ 音乐、哔哩哔哩、Safari / Chrome 网页播放
+- Apple Music、Spotify、网易云音乐、QQ 音乐
+- IINA、VLC、哔哩哔哩
+- Safari / Chrome 网页播放
+
+网易云音乐额外用 AppleScript 菜单点击作为兜底（MediaRemote 指令失败时）。
 
 ---
 
 ## 🧱 技术架构
 
 ```
-┌──────────────────────────┐        App Group         ┌───────────────────────────┐
-│   MediaWidget.app        │  group.com.mediawidget   │  MediaWidgetExtension     │
-│   (菜单栏 / 悬浮面板)     │  .shared (UserDefaults)  │  (WidgetKit 桌面小组件)    │
-├──────────────────────────┤ ◀──────────────────────▶ ├───────────────────────────┤
-│ MediaMonitor  ───────────┼── 写 JSON ───────────────▶│ TimelineProvider 读取      │
-│      │                   │                          │                           │
-│ MediaRemoteBridge        │                          │ MediaIntents              │
-│  (dlopen 私有框架)        │                          │  (dlopen 私有框架)         │
-│      │                   │                          │      │                    │
-│ MediaController ─────────┼── 发送播放指令 ───────────┼──────┘                    │
+┌──────────────────────────┐                          ┌───────────────────────────┐
+│   MediaWidget.app        │   共享状态（无需 App Group）│  MediaWidgetExtension     │
+│   (菜单栏 / 悬浮面板)     │  ①App Group（若有签名）    │  (WidgetKit 桌面小组件)    │
+├──────────────────────────┤ ───────────────────────▶ ├───────────────────────────┤
+│ MediaMonitor.shared      │  ②小组件沙盒容器内的        │ TimelineProvider 读取      │
+│   ├─ MediaRemoteBridge   │   SharedState.plist       │ MediaIntents              │
+│   └─ MediaController     │ ◀──── 播放指令 ────────────│   └─ MediaRemoteBridge    │
 └──────────────────────────┘                          └───────────────────────────┘
 ```
 
@@ -51,43 +55,60 @@
 
 ```
 MediaWidget/
-├── project.yml                     # XcodeGen 工程定义（唯一工程配置来源）
-├── Shared/                         # 双 target 共享代码
-│   ├── MediaInfo.swift             # 核心数据模型（Codable / Sendable）
-│   ├── Constants.swift             # App Group、WidgetKind、MediaRemote 指令码、已知 App
-│   └── SharedDefaults.swift        # App Group 读写封装（JSON 序列化）
-├── MediaWidget/                    # 主 App target
+├── project.yml                        # XcodeGen 工程定义（唯一工程配置来源）
+├── docs/                              # README 截图
+├── Shared/                            # 双 target 共享代码
+│   ├── MediaInfo.swift                # 核心数据模型（Codable / Sendable）
+│   ├── Constants.swift                # App Group、WidgetKind、MediaRemote 指令码
+│   ├── SharedDefaults.swift           # 跨进程存储（App Group → 沙盒容器 → 本地文件）
+│   └── DemoMedia.swift                # 示例数据 + 程序化生成的演示封面
+├── MediaWidget/                       # 主 App target
 │   ├── App/
-│   │   ├── MediaWidgetApp.swift    # @main，MenuBarExtra + Settings
-│   │   └── AppDelegate.swift       # Carbon 全局热键、NSPanel 悬浮窗
+│   │   ├── MediaWidgetApp.swift       # @main，MenuBarExtra + Settings
+│   │   └── AppDelegate.swift          # Carbon 全局热键、NSPanel 悬浮窗
 │   ├── MediaMonitor/
-│   │   ├── MediaMonitor.swift      # 状态中枢（@MainActor ObservableObject）
-│   │   └── MediaRemoteBridge.swift # 运行期 dlopen/CFBundle 加载私有框架
-│   ├── MediaController/            # 播放控制 + AppleScript 兜底
-│   ├── Views/                      # MenuBarView / FloatingPanelView
-│   ├── Settings/                   # SettingsView
-│   └── MediaWidget.entitlements
-└── MediaWidgetExtension/           # 小组件 target
-    ├── MediaWidgetBundle.swift     # WidgetBundle 入口
-    ├── MediaWidget.swift           # StaticConfiguration + TimelineProvider
-    ├── MediaIntents.swift          # 播放/暂停、上/下一曲、打开来源 App
-    ├── Views/MediaWidgetView.swift
-    └── MediaWidgetExtension.entitlements
+│   │   ├── MediaMonitor.swift         # 状态中枢（@MainActor 单例 ObservableObject）
+│   │   └── MediaRemoteBridge.swift    # 运行期加载私有框架
+│   ├── MediaController/               # 播放控制 + AppleScript 兜底
+│   ├── Views/                         # MenuBarView / FloatingPanelView
+│   ├── Settings/                      # SettingsView + 运行状态诊断
+│   └── MediaWidget.entitlements       # 非沙盒
+└── MediaWidgetExtension/              # 小组件 target
+    ├── Info.plist                     # ⚠️ 必须手写：WidgetKit 需要 NSExtension 字典
+    ├── MediaWidgetBundle.swift
+    ├── MediaWidget.swift              # StaticConfiguration + TimelineProvider
+    ├── MediaIntents.swift             # 播放/暂停、上/下一曲、打开来源 App
+    ├── Views/MediaWidgetView.swift    # small / medium / large 三套布局
+    └── MediaWidgetExtension.entitlements  # 必须沙盒
 ```
 
 ### 关键技术点
 
-- **私有框架 MediaRemote**：不链接任何私有 header，运行时通过 `dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote")` 取符号，编译期无需 SDK，代价是非 App Store 分发方式。
-- **App Group 通信**：`SharedDefaults` 用 `UserDefaults(suiteName: "group.com.mediawidget.shared")` 传 JSON，Widget 到期刷新时直接读缓存。
-- **时间戳校正**：播放进度用 `positionTimestamp` 推算，避免每秒轮询。
-- **签名**：目前 `CODE_SIGN_IDENTITY: "-"`（ad-hoc）+ 手写 entitlements，本地跑通后需换成真实开发团队签名，否则 App Group 容器可能不可用。
+1. **私有框架 MediaRemote**
+   不链接任何私有 header，运行时通过 `CFBundleCreate` + `CFBundleGetFunctionPointerForName` 取符号。编译期零依赖，代价是不能上架 App Store。
+
+2. **跨进程数据共享（无需 App Group）**
+   Widget 扩展**必须沙盒化**（否则 PlugInKit 直接拒绝注册：*plug-ins must be sandboxed*），沙盒进程只能读自己的容器。因此 `SharedDefaults` 按顺序尝试：
+   1. App Group `UserDefaults`（有开发者团队签名时）
+   2. 小组件沙盒容器 `~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application Support/MediaWidget/SharedState.plist`
+      —— 主 App 未沙盒化，可直接写入该路径；小组件读自己的容器，天然可读
+   3. 普通 `~/Library/Application Support/MediaWidget/`
+
+3. **WidgetKit 扩展的 Info.plist 必须手写**
+   `NSExtension → NSExtensionPointIdentifier = com.apple.widgetkit-extension` 无法用 `INFOPLIST_KEY_*` 表达，所以该 target 关闭 `GENERATE_INFOPLIST_FILE`。
+
+4. **时间戳校正**
+   播放进度用 `positionTimestamp` + `playbackRate` 外推，避免每秒轮询；仅在播放中启用 5 秒刷新定时器。
+
+5. **Swift 6 严格并发**
+   `MediaMonitor` 为 `@MainActor` 单例；`MediaRemoteBridge` 为 `@unchecked Sendable`（初始化后函数指针不可变）；Carbon 回调内用 `MainActor.assumeIsolated`。
 
 ---
 
 ## 🚀 环境要求
 
 - macOS 14.0+（Sonoma）
-- Xcode 16.2+（本项目在 Xcode 26.2 / SDK 26.2 上验证）
+- Xcode 16.2+（本项目在 Xcode 26.2 / SDK 26.2 / Swift 6.2 上验证通过）
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 
 ```bash
@@ -102,80 +123,93 @@ brew install xcodegen
 git clone https://github.com/Berlin070777/MediaWidget.git
 cd MediaWidget
 
-# 1. 生成 Xcode 工程（.xcodeproj 不入库，必须先生成）
-xcodegen generate
-
-# 2. 打开
+xcodegen generate     # .xcodeproj 不入库，必须先生成
 open MediaWidget.xcodeproj
 ```
 
-在 Xcode 中选择 `MediaWidget` scheme → Run。
+选择 `MediaWidget` scheme → Run。App 只在菜单栏出现（`LSUIElement`）。
 
-> 💡 **改了 `project.yml` 或增删了源文件，都要重新执行 `xcodegen generate`**。
-> 仓库刻意忽略 `*.xcodeproj/`，避免出现工程文件与 `project.yml` 不一致导致的诡异编译错误。
-
-命令行构建：
+命令行构建 / 安装：
 
 ```bash
 xcodegen generate
-xcodebuild -project MediaWidget.xcodeproj \
-           -scheme MediaWidget \
-           -configuration Debug \
-           build
+xcodebuild -project MediaWidget.xcodeproj -scheme MediaWidget -configuration Release build
+cp -R ~/Library/Developer/Xcode/DerivedData/MediaWidget-*/Build/Products/Release/MediaWidget.app /Applications/
 ```
 
-### 运行前配置
+> 💡 **改了 `project.yml` 或增删了源文件，都要重新执行 `xcodegen generate`**。
+> 仓库刻意忽略 `*.xcodeproj/`，避免工程文件与 `project.yml` 不一致导致的 `Multiple commands produce ...swiftmodule` 报错。
 
-1. **App Group**：把 `Constants.appGroupID`、两份 `.entitlements` 里的 `group.com.mediawidget.shared` 换成你账号下已注册的 App Group
-2. **Bundle ID**：`project.yml` 里的 `com.mediawidget.app` / `com.mediawidget.app.widget`
-3. **签名**：`project.yml` 中 `CODE_SIGN_IDENTITY` 与 `DEVELOPMENT_TEAM` 换成你的开发者证书
-4. **小组件添加**：运行一次 App 后，右键桌面 → 编辑小组件 → 搜索「媒体控制」
+### 使用
+
+| 操作 | 说明 |
+|---|---|
+| 点击菜单栏图标 | 打开控制面板 |
+| `⌘ ⇧ M` | 显示 / 隐藏悬浮面板（全局生效） |
+| 面板右上角 ⚙️ | 打开设置 |
+| 设置 → 演示模式 | 无播放器时预览完整 UI（示例曲目） |
+
+### 添加桌面小组件
+
+1. 把 App 放到 `/Applications` 并至少运行一次（让系统注册扩展）
+2. 右键桌面 → **编辑小组件…**
+3. 左侧列表找 **MediaWidget** → 把小组件拖到桌面
+
+### 无开发者账号也能跑
+
+默认配置为 **ad-hoc 签名**（`CODE_SIGN_IDENTITY: "-"`, `DEVELOPMENT_TEAM: ""`），无需任何账号即可编译运行，App Group entitlement 已注释掉，数据共享自动走沙盒容器方案。
+
+发布 / 正式签名时：
+
+1. `project.yml` 中填入 `DEVELOPMENT_TEAM`
+2. 打开两份 `.entitlements` 里注释的 `com.apple.security.application-groups`
+3. `xcodegen generate` 后自动签名
 
 ---
 
-## 🚧 已知问题
+## 🧪 开发调试
 
-当前代码处于 **编译修复阶段**，`xcodegen generate` + `xcodebuild` 尚有报错待处理：
+```bash
+# 演示模式（无需播放器即可看到完整 UI）
+defaults write com.mediawidget.app demoMode -bool YES
 
-### 1. 已修复：工程文件过期
+# 启动即显示悬浮面板
+defaults write com.mediawidget.app showPanelOnLaunch -bool YES
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `error: Multiple commands produce .../MediaWidget.swiftmodule` | 入库的 `.xcodeproj` 生成于 `PRODUCT_MODULE_NAME` 加入 `project.yml` 之前，两个 target 模块名都为 `MediaWidget` | 重新 `xcodegen generate` 即可（`.xcodeproj` 现已加入 `.gitignore` 防止复发） |
+# 查看共享状态文件
+plutil -p ~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application\ Support/MediaWidget/SharedState.plist
+```
 
-### 2. 待修：Swift 6 严格并发
+---
 
-| 位置 | 错误 |
+## 🚧 已知限制
+
+| 限制 | 说明 |
 |---|---|
-| `MediaWidgetExtension/MediaIntents.swift:47-85` | `static property 'title'/'description'/'openAppWhenRun' is not concurrency-safe because it is nonisolated global shared mutable state`<br>→ 静态属性为 `var` 且非 `@MainActor`，需改为 `@MainActor static var` 或标注 `nonisolated(unsafe)` |
-| `Shared/SharedDefaults.swift:16` | `stored property 'defaults' of 'Sendable'-conforming struct 'SharedDefaults' has non-Sendable type 'UserDefaults'`<br>→ 移除无谓的 `Sendable` 约束，或改存 `suiteName` 按需取 |
-
-### 3. 运行时风险
-
-- ad-hoc 签名下 App Group 容器可能创建失败，`SharedDefaults` 会走 `assertionFailure` 分支
-- 私有 API `MediaRemote` 在系统升级后符号名可能变动，`MediaRemoteBridge` 已做 `nil` 保护但功能会静默失效
+| 不能上架 App Store | 使用私有框架 `MediaRemote`，不受 Apple 支持，系统更新可能导致失效 |
+| 小组件需手动添加 | WidgetKit 不允许程序化把小组件放到桌面，首次需按上文手动拖入 |
+| ad-hoc 签名无 App Group | 走沙盒容器文件共享；换成正式签名后自动切换到 App Group |
+| 多音源切换未做 UI | `allSources` 已采集，UI 待实现 |
+| 系统升级风险 | `MediaRemote` 符号名可能变动；`MediaRemoteBridge` 已做 `nil` 保护，失效时只降级不崩溃 |
 
 ---
 
 ## 🗺 Roadmap
 
-- [ ] 修复 Swift 6 并发报错，跑通首次构建
-- [ ] 接入真实开发者签名，验证 App Group 共享
-- [ ] 多音源切换 UI（`MediaMonitor.allSources` 已就绪）
-- [ ] 小组件支持 `.systemSmall` 紧凑布局（`CompactPlayerWidget` kind 已预留）
+- [x] 修复 Swift 6 并发报错，跑通构建
+- [x] 修复小组件不注册（缺 `NSExtension` / 非沙盒）
+- [x] 无 App Group 时的跨进程数据共享
+- [x] `.systemSmall` 紧凑小组件
+- [x] 开机自启改用 `SMAppService`
+- [ ] 多音源切换 UI
 - [ ] 主题与封面显示开关落库
-- [ ] 开机自启动改用 `SMAppService`
+- [ ] 歌词 / 音频可视化
 
 ---
 
 ## ⚠️ 免责声明
 
-本项目使用 **Apple 私有框架 `MediaRemote`** 与 `NSAppleScript` 控制播放，仅用于个人学习与研究：
-
-- 无法上架 Mac App Store
-- 不受 Apple 官方支持，系统更新可能导致失效
-- 请自行承担使用风险
-
+本项目使用 **Apple 私有框架 `MediaRemote`** 与 `NSAppleScript` 控制播放，仅用于个人学习与研究，请自行承担使用风险。
 媒体元数据与封面版权归各自内容提供方所有。
 
 ---

@@ -71,9 +71,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mediawidget.app.widget
         PRODUCT_NAME: MediaWidgetExtension
         PRODUCT_MODULE_NAME: MediaWidgetExt
-        GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_KEY_CFBundleDisplayName: 媒体控制
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        # The widget extension needs an explicit Info.plist: WidgetKit requires the
+        # NSExtension / NSExtensionPointIdentifier dictionary, which cannot be
+        # expressed through INFOPLIST_KEY_* build settings.
+        GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: MediaWidgetExtension/Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"

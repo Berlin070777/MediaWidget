@@ -23,6 +23,8 @@ struct MediaWidgetView: View {
     var body: some View {
         Group {
             switch widgetFamily {
+            case .systemSmall:
+                compactLayout
             case .systemMedium:
                 mediumLayout
             case .systemLarge:
@@ -30,6 +32,53 @@ struct MediaWidgetView: View {
             default:
                 mediumLayout
             }
+        }
+    }
+
+
+    // MARK: - Compact Layout (.systemSmall)
+
+    private var compactLayout: some View {
+        VStack(spacing: 6) {
+            HStack {
+                sourceLabel
+                Spacer()
+                Button(intent: TogglePlayPauseIntent()) {
+                    Image(systemName: mediaInfo.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(
+                            mediaInfo.capabilities.canTogglePlayPause && !isEmpty ? .primary : .tertiary
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!mediaInfo.capabilities.canTogglePlayPause || isEmpty)
+            }
+
+            artworkView(size: 54)
+
+            VStack(spacing: 1) {
+                Text(isEmpty ? "未在播放" : mediaInfo.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(isEmpty ? .secondary : .primary)
+
+                Text(mediaInfo.artist)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Capsule()
+                .fill(.quaternary)
+                .frame(height: 3)
+                .overlay(alignment: .leading) {
+                    GeometryReader { geometry in
+                        Capsule()
+                            .fill(isEmpty ? Color.secondary : Color.accentColor)
+                            .frame(width: max(0, geometry.size.width * mediaInfo.progress))
+                    }
+                    .frame(height: 3)
+                }
         }
     }
 
