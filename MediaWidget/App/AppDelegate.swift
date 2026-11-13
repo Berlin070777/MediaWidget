@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // to appear, so the widget and the floating panel always have fresh data.
         MediaMonitor.shared.startMonitoring()
 
+        // Nudge the widgets so they pick up the freshly written shared state.
+        SharedDefaults.shared.requestWidgetReload()
+
         // Development convenience:
         //   defaults write com.mediawidget.app showPanelOnLaunch -bool YES
         if UserDefaults.standard.bool(forKey: "showPanelOnLaunch") {

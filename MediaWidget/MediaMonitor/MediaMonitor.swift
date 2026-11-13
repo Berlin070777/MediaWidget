@@ -55,6 +55,9 @@ final class MediaMonitor: ObservableObject {
     /// The interval (in seconds) at which elapsed time is refreshed during playback.
     private let refreshInterval: TimeInterval = 5.0
 
+    /// Last time the shared store was written, used to throttle widget reloads.
+    private var lastSharedWrite: Date = .distantPast
+
     /// Whether demo mode is active. When enabled, the UI shows a sample track so
     /// the interface can be inspected without a real player running.
     /// Toggle with: `defaults write com.mediawidget.app demoMode -bool YES`
@@ -247,14 +250,34 @@ final class MediaMonitor: ObservableObject {
         }
     }
 
-    /// Applies a media snapshot to the published state and the shared store.
+    /// Applies a media snapshot to the published state and, when something
+    /// *meaningful* changed, to the shared store.
+    ///
+    /// `MediaInfo` carries `lastUpdated` / `positionTimestamp`, which change on every
+    /// poll. Writing and reloading the widget on those alone would trigger a widget
+    /// reload every few seconds, so only real changes (track, source, play state,
+    /// artwork) hit the disk and WidgetKit.
     private func applyMediaInfo(_ mediaInfo: MediaInfo) {
-        guard currentMedia != mediaInfo else { return }
+        let previous = currentMedia
+        let isFirstWrite = previous.isEmpty && !mediaInfo.isEmpty
+        let significantChange = isFirstWrite
+            || previous.sourceID != mediaInfo.sourceID
+            || previous.title != mediaInfo.title
+            || previous.artist != mediaInfo.artist
+            || previous.album != mediaInfo.album
+            || previous.isPlaying != mediaInfo.isPlaying
+            || abs(previous.duration - mediaInfo.duration) > 0.5
+            || previous.artworkData?.count != mediaInfo.artworkData?.count
 
         currentMedia = mediaInfo
         allSources = mediaInfo.isEmpty ? [] : [mediaInfo]
 
-        // Persist to shared storage so the widget extension can read it.
+        // Always write on a real change; otherwise throttle to one write per 20 s so
+        // the widget's progress bar stays accurate without being reloaded every poll.
+        let now = Date()
+        guard significantChange || now.timeIntervalSince(lastSharedWrite) > 20 else { return }
+        lastSharedWrite = now
+
         sharedDefaults.save(mediaInfo: mediaInfo)
         sharedDefaults.requestWidgetReload()
     }

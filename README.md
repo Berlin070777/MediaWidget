@@ -6,9 +6,13 @@
 
 当前状态：**可编译、可运行**（Xcode 26.2 / Swift 6 严格并发，macOS 14.0+）。
 
-| 悬浮控制面板（⌘⇧M） | 设置面板 |
+| 桌面小组件（中） | 桌面小组件（大） |
 |---|---|
-| ![悬浮面板](docs/floating-panel.png) | ![设置](docs/settings.png) |
+| ![中等小组件](docs/widget-medium.png) | ![大号小组件](docs/widget-large.png) |
+
+| 桌面小组件（小） | 悬浮控制面板（⌘⇧M） | 设置面板 |
+|---|---|---|
+| ![小号小组件](docs/widget-small.png) | ![悬浮面板](docs/floating-panel.png) | ![设置](docs/settings.png) |
 
 ---
 
@@ -166,7 +170,15 @@ cp -R ~/Library/Developer/Xcode/DerivedData/MediaWidget-*/Build/Products/Release
 
 1. 把 App 放到 `/Applications` 并至少运行一次（让系统注册扩展）
 2. 右键桌面 → **编辑小组件…**
-3. 左侧列表找 **MediaWidget** → 把小组件拖到桌面
+3. 左侧列表找 **MediaWidget**（按字母序排在中文 App 之后）→ 把小组件拖到桌面
+4. 拖上去之后如果显示「未在播放」，等 5 秒或切换一首歌即可刷新
+
+> 小组件的沙盒容器与主 App 是两个文件系统，共享文件固定落在
+> `~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application Support/MediaWidget/SharedState.plist`。
+> 排查时可查看实时日志：
+> ```bash
+> log stream --predicate 'subsystem == "com.mediawidget.app"' --info
+> ```
 
 ### 无开发者账号也能跑
 
@@ -217,6 +229,8 @@ plutil -p ~/Library/Containers/com.mediawidget.app.widget/Data/Library/Applicati
 - [x] 开机自启改用 `SMAppService`
 - [x] MediaRemote 失效后的多数据源兜底（AppleScript + 网易云本地记录）
 - [x] 悬浮面板原生红绿灯
+- [x] 小组件读取不到数据（沙盒路径解析错误）
+- [x] 小组件重载过于频繁（改为按内容变化 + 20 秒节流）
 - [ ] 多音源切换 UI
 - [ ] 主题与封面显示开关落库
 - [ ] 歌词 / 音频可视化

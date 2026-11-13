@@ -5,6 +5,7 @@
 
 import WidgetKit
 import SwiftUI
+import os
 
 // MARK: - Timeline Entry
 
@@ -51,6 +52,9 @@ struct MediaWidgetProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<MediaWidgetEntry>) -> Void) {
         let info = sharedDefaults.loadMediaInfo() ?? .empty
+        // Visible in Console.app / `log stream` – makes debugging the widget much easier.
+        Logger(subsystem: "com.mediawidget.app", category: "Widget")
+            .info("Timeline entry: \(info.title, privacy: .public) / \(info.artist, privacy: .public) playing=\(info.isPlaying) artwork=\(info.artworkData?.count ?? 0)B")
         let entry = MediaWidgetEntry(date: .now, mediaInfo: info)
 
         // Schedule the next refresh based on playback state.

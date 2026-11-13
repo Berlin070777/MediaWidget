@@ -1,7 +1,10 @@
 // MediaWidgetView.swift
 // MediaWidgetExtension
 //
-// Widget UI for medium and large widget families.
+// Widget UI for the small, medium and large families.
+//
+// Layouts are kept deliberately compact: macOS applies its own content margins
+// around a widget, so a medium widget really only has ~332×138 pt to work with.
 
 import SwiftUI
 import WidgetKit
@@ -15,338 +18,226 @@ import AppKit
 struct MediaWidgetView: View {
     let entry: MediaWidgetEntry
 
-    @Environment(\.widgetFamily) var widgetFamily
+    /// Explicit family override, used by previews and offscreen rendering.
+    /// `nil` means "read it from the widget environment".
+    var familyOverride: WidgetFamily?
 
-    private var mediaInfo: MediaInfo { entry.mediaInfo }
-    private var isEmpty: Bool { mediaInfo.sourceID.isEmpty }
+    @Environment(\.widgetFamily) private var environmentFamily
+
+    private var widgetFamily: WidgetFamily { familyOverride ?? environmentFamily }
+    private var media: MediaInfo { entry.mediaInfo }
+    private var isEmpty: Bool { media.isEmpty }
 
     var body: some View {
-        Group {
-            switch widgetFamily {
-            case .systemSmall:
-                compactLayout
-            case .systemMedium:
-                mediumLayout
-            case .systemLarge:
-                largeLayout
-            default:
-                mediumLayout
-            }
+        switch widgetFamily {
+        case .systemSmall:
+            compactLayout
+        case .systemLarge:
+            largeLayout
+        default:
+            mediumLayout
         }
     }
 
-
-    // MARK: - Compact Layout (.systemSmall)
+    // MARK: - Compact (.systemSmall)
 
     private var compactLayout: some View {
-        VStack(spacing: 6) {
-            HStack {
-                sourceLabel
-                Spacer()
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomTrailing) {
+                artworkView(size: 58)
+
                 Button(intent: TogglePlayPauseIntent()) {
-                    Image(systemName: mediaInfo.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(
-                            mediaInfo.capabilities.canTogglePlayPause && !isEmpty ? .primary : .tertiary
-                        )
+                    Image(systemName: media.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 17))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.55))
                 }
                 .buttonStyle(.plain)
-                .disabled(!mediaInfo.capabilities.canTogglePlayPause || isEmpty)
+                .disabled(!media.capabilities.canTogglePlayPause || isEmpty)
+                .offset(x: 3, y: 3)
             }
-
-            artworkView(size: 54)
 
             VStack(spacing: 1) {
-                Text(isEmpty ? "未在播放" : mediaInfo.title)
+                Text(isEmpty ? "未在播放" : media.title)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
-                    .foregroundStyle(isEmpty ? .secondary : .primary)
-
-                Text(mediaInfo.artist)
-                    .font(.system(size: 10))
+                    .minimumScaleFactor(0.75)
+                Text(media.artist)
+                    .font(.system(size: 9.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
 
-            Capsule()
-                .fill(.quaternary)
-                .frame(height: 3)
-                .overlay(alignment: .leading) {
-                    GeometryReader { geometry in
-                        Capsule()
-                            .fill(isEmpty ? Color.secondary : Color.accentColor)
-                            .frame(width: max(0, geometry.size.width * mediaInfo.progress))
-                    }
-                    .frame(height: 3)
-                }
+            progressBar(height: 3)
         }
     }
 
-    // MARK: - Medium Layout
+    // MARK: - Medium (.systemMedium)
 
     private var mediumLayout: some View {
-        VStack(spacing: 8) {
-            // Top row: artwork + track info
-            HStack(spacing: 12) {
-                artworkView(size: 60)
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                artworkView(size: 52)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mediaInfo.title)
-                        .font(.headline)
-                        .fontWeight(.bold)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isEmpty ? "未在播放" : media.title)
+                        .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(isEmpty ? .secondary : .primary)
 
-                    Text(mediaInfo.artist)
-                        .font(.subheadline)
+                    Text(media.artist)
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 
-                    sourceLabel
+                    sourceLabel(fontSize: 9)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // Progress bar
-            progressSection
+            progressRow(fontSize: 8.5, barHeight: 3)
 
-            // Control buttons
-            controlButtons
+            controlsRow(iconSize: 13, playSize: 21, spacing: 26)
         }
-        .padding(.vertical, 4)
     }
 
-    // MARK: - Large Layout
+    // MARK: - Large (.systemLarge)
 
     private var largeLayout: some View {
-        VStack(spacing: 12) {
-            // Source badge at the top
-            HStack {
-                sourceLabel
-                Spacer()
-                if let volume = mediaInfo.volume {
-                    volumeLabel(volume: volume)
-                }
-            }
+        VStack(spacing: 14) {
+            HStack(spacing: 14) {
+                artworkView(size: 128)
 
-            // Artwork + track info
-            HStack(spacing: 16) {
-                artworkView(size: 90)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(mediaInfo.title)
-                        .font(.title3)
-                        .fontWeight(.bold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(isEmpty ? "未在播放" : media.title)
+                        .font(.system(size: 18, weight: .semibold))
                         .lineLimit(2)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(isEmpty ? .secondary : .primary)
 
-                    Text(mediaInfo.artist)
-                        .font(.body)
+                    Text(media.artist)
+                        .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 
-                    if let album = mediaInfo.album, !album.isEmpty {
+                    if let album = media.album, !album.isEmpty {
                         Text(album)
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
+
+                    sourceLabel(fontSize: 10)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Spacer(minLength: 4)
+            progressRow(fontSize: 9.5, barHeight: 4)
 
-            // Progress bar
-            progressSection
-
-            // Control buttons (larger in large widget)
-            controlButtons
+            controlsRow(iconSize: 17, playSize: 32, spacing: 38)
         }
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Artwork
+    // MARK: - Components
 
     @ViewBuilder
     private func artworkView(size: CGFloat) -> some View {
         Group {
-            if let artworkData = mediaInfo.artworkData,
-               let nsImage = NSImage(data: artworkData) {
-                Image(nsImage: nsImage)
+            if let data = media.artworkData, let image = NSImage(data: data) {
+                Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.quaternary)
+                    LinearGradient(
+                        colors: [Color.accentColor.opacity(0.55), Color.accentColor.opacity(0.22)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                     Image(systemName: "music.note")
-                        .font(.system(size: size * 0.35))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: size * 0.4))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.14, style: .continuous))
     }
 
-    // MARK: - Source Label
-
-    private var sourceLabel: some View {
-        HStack(spacing: 4) {
-            let info = mediaInfo.sourceAppInfo
+    private func sourceLabel(fontSize: CGFloat) -> some View {
+        HStack(spacing: 3) {
+            let info = media.sourceAppInfo
             Image(systemName: info.symbolName)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: fontSize))
             Text(isEmpty ? "未连接" : info.displayName)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: fontSize))
+                .lineLimit(1)
         }
+        .foregroundStyle(.secondary)
     }
 
-    // MARK: - Volume Label
+    /// Progress bar with elapsed / total labels.
+    private func progressRow(fontSize: CGFloat, barHeight: CGFloat) -> some View {
+        VStack(spacing: 3) {
+            progressBar(height: barHeight)
 
-    private func volumeLabel(volume: Float) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: volumeIconName(for: volume))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("\(Int(volume * 100))%")
-                .font(.caption2)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func volumeIconName(for volume: Float) -> String {
-        switch volume {
-        case 0:
-            return "speaker.slash.fill"
-        case ..<0.33:
-            return "speaker.wave.1.fill"
-        case ..<0.66:
-            return "speaker.wave.2.fill"
-        default:
-            return "speaker.wave.3.fill"
-        }
-    }
-
-    // MARK: - Progress Section
-
-    private var progressSection: some View {
-        VStack(spacing: 2) {
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(.quaternary)
-                        .frame(height: 4)
-
-                    Capsule()
-                        .fill(isEmpty ? Color.secondary : Color.accentColor)
-                        .frame(
-                            width: max(0, geometry.size.width * mediaInfo.progress),
-                            height: 4
-                        )
-                }
+            HStack(spacing: 0) {
+                Text(media.formattedCurrentPosition)
+                    .monospacedDigit()
+                Spacer(minLength: 4)
+                Text(media.formattedDuration)
+                    .monospacedDigit()
             }
-            .frame(height: 4)
+            .font(.system(size: fontSize))
+            .foregroundStyle(.secondary)
+        }
+    }
 
-            HStack {
-                Text(mediaInfo.formattedCurrentPosition)
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Text(mediaInfo.formattedDuration)
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+    private func progressBar(height: CGFloat) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
+                Capsule()
+                    .fill(isEmpty ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(Color.accentColor))
+                    .frame(width: max(0, geometry.size.width * media.progress))
             }
         }
+        .frame(height: height)
     }
 
-    // MARK: - Control Buttons
+    private func controlsRow(iconSize: CGFloat, playSize: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            Spacer(minLength: 0)
 
-    private var controlButtons: some View {
-        HStack(spacing: widgetFamily == .systemLarge ? 32 : 24) {
-            Spacer()
-
-            // Previous Track
             Button(intent: PreviousTrackIntent()) {
                 Image(systemName: "backward.fill")
-                    .font(.system(size: controlIconSize))
-                    .foregroundStyle(
-                        mediaInfo.capabilities.contains(.canPreviousTrack) && !isEmpty
-                            ? .primary : .tertiary
-                    )
+                    .font(.system(size: iconSize))
+                    .foregroundStyle(media.capabilities.canSkipPrevious && !isEmpty ? .primary : .tertiary)
             }
             .buttonStyle(.plain)
-            .disabled(!mediaInfo.capabilities.contains(.canPreviousTrack) || isEmpty)
+            .disabled(!media.capabilities.canSkipPrevious || isEmpty)
 
-            // Play / Pause
             Button(intent: TogglePlayPauseIntent()) {
-                Image(systemName: mediaInfo.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: controlIconSize * 1.3))
-                    .foregroundStyle(
-                        (mediaInfo.capabilities.contains(.canPlay) || mediaInfo.capabilities.contains(.canPause)) && !isEmpty
-                            ? .primary : .tertiary
-                    )
+                Image(systemName: media.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: playSize))
+                    .foregroundStyle(media.capabilities.canTogglePlayPause && !isEmpty ? .primary : .tertiary)
             }
             .buttonStyle(.plain)
-            .disabled(
-                !(mediaInfo.capabilities.contains(.canPlay) || mediaInfo.capabilities.contains(.canPause)) || isEmpty
-            )
+            .disabled(!media.capabilities.canTogglePlayPause || isEmpty)
 
-            // Next Track
             Button(intent: NextTrackIntent()) {
                 Image(systemName: "forward.fill")
-                    .font(.system(size: controlIconSize))
-                    .foregroundStyle(
-                        mediaInfo.capabilities.contains(.canNextTrack) && !isEmpty
-                            ? .primary : .tertiary
-                    )
+                    .font(.system(size: iconSize))
+                    .foregroundStyle(media.capabilities.canSkipNext && !isEmpty ? .primary : .tertiary)
             }
             .buttonStyle(.plain)
-            .disabled(!mediaInfo.capabilities.contains(.canNextTrack) || isEmpty)
+            .disabled(!media.capabilities.canSkipNext || isEmpty)
 
-            Spacer()
+            Spacer(minLength: 0)
         }
     }
-
-    private var controlIconSize: CGFloat {
-        widgetFamily == .systemLarge ? 18 : 15
-    }
-}
-
-// MARK: - Preview
-
-#Preview("Medium - Playing", as: .systemMedium) {
-    MediaWidget()
-} timeline: {
-    MediaWidgetEntry(
-        date: .now,
-        mediaInfo: MediaInfo(
-            sourceID: "com.apple.Music",
-            sourceName: "Apple Music",
-            title: "Bohemian Rhapsody",
-            artist: "Queen",
-            album: "A Night at the Opera",
-            artworkData: nil,
-            duration: 354,
-            currentPosition: 120,
-            playbackRate: 1,
-            volume: 0.7,
-            capabilities: .all,
-            lastUpdated: .now,
-            positionTimestamp: .now
-        )
-    )
-}
-
-#Preview("Medium - Empty", as: .systemMedium) {
-    MediaWidget()
-} timeline: {
-    MediaWidgetEntry(date: .now, mediaInfo: .empty)
 }

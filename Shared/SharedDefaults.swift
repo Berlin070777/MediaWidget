@@ -45,47 +45,41 @@ final class SharedDefaults: @unchecked Sendable {
 
     /// Path of the fallback plist, used when no App Group is available.
     ///
-    /// Two candidates are tried in order, and the first writable one wins:
+    /// The two processes see different file systems, so the location is decided by
+    /// *who we are*, not by probing writability:
     ///
-    /// 1. The widget extension's sandbox container – the app is not sandboxed, so it
-    ///    may create and write there, while the sandboxed widget can read its own
-    ///    container. This gives cross-process sharing without an App Group.
-    /// 2. The plain `~/Library/Application Support/MediaWidget` directory, which is
-    ///    what the sandboxed widget sees as *its* Application Support.
+    /// - **Widget extension (sandboxed)**: its own `Application Support` directory,
+    ///   i.e. `~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application Support/MediaWidget`.
+    /// - **Main app (not sandboxed)**: that very same sandbox container, which a
+    ///   non-sandboxed process is allowed to create and write.
+    ///
+    /// Both therefore resolve to the identical file.
     static var fallbackFileURL: URL {
-        let fileName = "SharedState.plist"
-
-        for directory in fallbackDirectories {
-            do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                return directory.appendingPathComponent(fileName)
-            } catch {
-                continue
-            }
+        let directory: URL
+        if isSandboxed {
+            let base = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+            directory = base.appendingPathComponent("MediaWidget", isDirectory: true)
+        } else {
+            directory = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Containers", isDirectory: true)
+                .appendingPathComponent(Constants.widgetBundleID, isDirectory: true)
+                .appendingPathComponent("Data/Library/Application Support/MediaWidget", isDirectory: true)
         }
-
-        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(fileName)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("SharedState.plist")
     }
 
-    /// Candidate directories for the shared state file, most preferred first.
-    private static var fallbackDirectories: [URL] {
-        var candidates: [URL] = []
-
-        // 1. Widget sandbox container (visible to a non-sandboxed writer).
-        let container = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Containers", isDirectory: true)
-            .appendingPathComponent(Constants.widgetBundleID, isDirectory: true)
-            .appendingPathComponent("Data/Library/Application Support/MediaWidget", isDirectory: true)
-        candidates.append(container)
-
-        // 2. Our own Application Support (the sandbox container when sandboxed).
-        if let base = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first {
-            candidates.append(base.appendingPathComponent("MediaWidget", isDirectory: true))
+    /// Whether this process runs inside an App Sandbox container.
+    ///
+    /// `APP_SANDBOX_CONTAINER_ID` is set by the sandbox launcher; the `NSHomeDirectory`
+    /// check is a belt-and-braces fallback.
+    static var isSandboxed: Bool {
+        if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil {
+            return true
         }
-
-        return candidates
+        return NSHomeDirectory().contains("/Library/Containers/")
     }
 
     // MARK: - Coders
