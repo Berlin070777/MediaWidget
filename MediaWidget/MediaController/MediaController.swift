@@ -1,155 +1,47 @@
-import Foundation
 import AppKit
 
-/// Controls media playback through MediaRemote commands (primary),
-/// AppleScript menu clicking (fallback for NeteaseMusic),
-/// and system volume via AppleScript.
-class MediaController {
-    private let bridge: MediaRemoteBridge?
+actor MediaController {
+    private let netease = NeteaseMusicSource()
+    private let bilibili = BilibiliSource()
 
-    init(bridge: MediaRemoteBridge?) {
-        self.bridge = bridge
+    struct Reading: Sendable {
+        let sources: [MediaInfo]
+        let artworkURLs: [String: URL]
+        let accessibility: Bool
+        let systemAudio: SystemAudio.Snapshot
     }
 
-    // MARK: - MediaRemote Controls
-
-    /// Toggle play/pause. Falls back to AppleScript for NeteaseMusic if MediaRemote fails.
-    func togglePlayPause() {
-        let success = bridge?.sendCommand(.togglePlayPause) ?? false
-        if !success {
-            neteaseMusicMenuClick("播放")
+    func read(processes: [String: pid_t], readArtwork: Bool) -> Reading {
+        let desktop = [
+            netease.snapshot(pid: processes[Constants.KnownApp.neteaseMusic]),
+            bilibili.snapshot(pid: processes[Constants.KnownApp.bilibili])
+        ].compactMap { $0 }.map { ($0, $0.bundleID == Constants.KnownApp.neteaseMusic ? netease.artworkURL : nil) }
+        let web = [BrowserKind.chrome, .safari].flatMap { browser in
+            processes[browser.bundleID] == nil ? [] : BrowserBridge.snapshots(browser)
         }
-    }
-
-    /// Send play command via MediaRemote.
-    func play() {
-        let success = bridge?.sendCommand(.play) ?? false
-        if !success {
-            NSLog("[MediaController] Play command failed")
+        var artworkURLs: [String: URL] = [:]
+        let sources = (desktop + web).map { media, url in
+            var media = media
+            if readArtwork, let url {
+                artworkURLs[media.sourceID] = url
+                media.artworkData = ArtworkCache.cached(url)
+            } else {
+                media.artworkData = nil
+            }
+            return media
         }
+        return Reading(sources: sources, artworkURLs: artworkURLs,
+                       accessibility: AccessibilityMedia.isTrusted, systemAudio: SystemAudio.snapshot())
     }
 
-    /// Send pause command via MediaRemote.
-    func pause() {
-        let success = bridge?.sendCommand(.pause) ?? false
-        if !success {
-            NSLog("[MediaController] Pause command failed")
+    func perform(_ action: MediaCommand, media: MediaInfo, pid: pid_t?, value: Double?) -> Bool {
+        if BrowserKind.kind(for: media.sourceID) != nil {
+            return BrowserBridge.send(action, to: media, value: value)
         }
-    }
-
-    /// Skip to next track. Falls back to AppleScript for NeteaseMusic if MediaRemote fails.
-    func nextTrack() {
-        let success = bridge?.sendCommand(.nextTrack) ?? false
-        if !success {
-            neteaseMusicMenuClick("下一个")
+        if media.bundleID == Constants.KnownApp.bilibili {
+            return bilibili.perform(action, itemID: media.itemID)
         }
-    }
-
-    /// Skip to previous track. Falls back to AppleScript for NeteaseMusic if MediaRemote fails.
-    func previousTrack() {
-        let success = bridge?.sendCommand(.previousTrack) ?? false
-        if !success {
-            neteaseMusicMenuClick("上一个")
-        }
-    }
-
-    /// Seek to a specific time in seconds.
-    func seek(to time: Double) {
-        bridge?.setElapsedTime(time)
-    }
-
-    // MARK: - Volume Control (System-wide via AppleScript)
-
-    /// Returns the current system output volume (0–100).
-    func getSystemVolume() -> Int {
-        let script = "output volume of (get volume settings)"
-        guard let output = runAppleScript(script) else {
-            return 50
-        }
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Int(trimmed) ?? 50
-    }
-
-    /// Sets the system output volume, clamped to 0–100.
-    func setSystemVolume(_ volume: Int) {
-        let clamped = min(max(volume, 0), 100)
-        let script = "set volume output volume \(clamped)"
-        _ = runAppleScript(script)
-    }
-
-    /// Returns whether the system audio output is currently muted.
-    func isMuted() -> Bool {
-        let script = "output muted of (get volume settings)"
-        guard let output = runAppleScript(script) else {
-            return false
-        }
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed == "true"
-    }
-
-    /// Toggles the system mute state.
-    func toggleMute() {
-        let currentlyMuted = isMuted()
-        let newState = currentlyMuted ? "false" : "true"
-        let script = "set volume output muted \(newState)"
-        _ = runAppleScript(script)
-    }
-
-    // MARK: - AppleScript Fallback for NeteaseMusic
-
-    /// Clicks a menu item in NeteaseMusic's "控制" menu via System Events.
-    private func neteaseMusicMenuClick(_ menuItem: String) {
-        let script = """
-        tell application "System Events"
-            tell process "NeteaseMusic"
-                click menu item "\(menuItem)" of menu 1 of menu bar item "控制" of menu bar 1
-            end tell
-        end tell
-        """
-        _ = runAppleScript(script)
-    }
-
-    // MARK: - App Activation
-
-    /// Activates (brings to front) the application with the given bundle identifier.
-    func activateApp(bundleID: String) {
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
-            app.activate()
-        }
-    }
-
-    // MARK: - Private Helpers
-
-    /// Runs an AppleScript expression synchronously via `/usr/bin/osascript`.
-    /// Returns the trimmed stdout on success, or `nil` on failure.
-    @discardableResult
-    private func runAppleScript(_ script: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            NSLog("[MediaController] Failed to run AppleScript: %@", error.localizedDescription)
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else {
-            let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let errorString = String(data: errorData, encoding: .utf8) ?? "unknown error"
-            NSLog("[MediaController] AppleScript error (status %d): %@",
-                  process.terminationStatus, errorString)
-            return nil
-        }
-
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)
+        guard media.bundleID == Constants.KnownApp.neteaseMusic, let pid else { return false }
+        return netease.perform(action, pid: pid)
     }
 }

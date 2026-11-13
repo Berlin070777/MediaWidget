@@ -1,92 +1,105 @@
 name: MediaWidget
 options:
-  bundleIdPrefix: com.mediawidget
   deploymentTarget:
     macOS: "14.0"
-  xcodeVersion: "16.2"
   createIntermediateGroups: true
-  defaultConfig: Debug
 
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
-    DEVELOPMENT_TEAM: ""
-
-configs:
-  Debug: debug
-  Release: release
+    MEDIA_WIDGET_APP_GROUP: ""
+    MARKETING_VERSION: "1.1.1"
+    CURRENT_PROJECT_VERSION: "3"
 
 targets:
-
   MediaWidget:
     type: application
     platform: macOS
     sources:
       - path: MediaWidget
-        excludes:
-          - "**/.DS_Store"
+        excludes: ["Info.plist", "*.entitlements"]
       - path: Shared
-        excludes:
-          - "**/.DS_Store"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mediawidget.app
-        PRODUCT_NAME: MediaWidget
         PRODUCT_MODULE_NAME: MediaWidgetApp
-        INFOPLIST_KEY_LSUIElement: true
-        INFOPLIST_KEY_NSMainNibFile: ""
-        INFOPLIST_KEY_NSPrincipalClass: NSApplication
-        GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_KEY_CFBundleDisplayName: MediaWidget
-        # AppleScript 读取 Music / Spotify 播放状态时系统会请求自动化权限
-        INFOPLIST_KEY_NSAppleEventsUsageDescription: MediaWidget 需要读取播放器的播放状态与曲目信息。
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: MediaWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MediaWidget/MediaWidget$(MEDIA_WIDGET_ENTITLEMENT_SUFFIX).entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
-        SWIFT_STRICT_CONCURRENCY: minimal
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGN_ENTITLEMENTS: MediaWidget/MediaWidget.entitlements
-      configs:
-        Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-        Release:
-          SWIFT_OPTIMIZATION_LEVEL: -O
     dependencies:
       - target: MediaWidgetExtension
         embed: true
+      - target: SafariExtension
+        embed: true
+      - target: MediaWidgetChromeHost
+        embed: false
+        link: false
+    postBuildScripts:
+      - name: Package Chrome integration
+        basedOnDependencyAnalysis: false
+        script: |
+          resources="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ChromeExtension"
+          executables="${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}"
+          mkdir -p "$resources" "$executables"
+          cp "${SRCROOT}/BrowserExtension/Chrome/manifest.json" "$resources/"
+          cp "${SRCROOT}/BrowserExtension/Shared/"*.js "$resources/"
+          cp "${BUILT_PRODUCTS_DIR}/MediaWidgetChromeHost" "$executables/"
 
   MediaWidgetExtension:
     type: app-extension
     platform: macOS
     sources:
       - path: MediaWidgetExtension
-        excludes:
-          - "**/.DS_Store"
+        excludes: ["Info.plist", "*.entitlements"]
       - path: Shared
-        excludes:
-          - "**/.DS_Store"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mediawidget.app.widget
-        PRODUCT_NAME: MediaWidgetExtension
         PRODUCT_MODULE_NAME: MediaWidgetExt
-        # The widget extension needs an explicit Info.plist: WidgetKit requires the
-        # NSExtension / NSExtensionPointIdentifier dictionary, which cannot be
-        # expressed through INFOPLIST_KEY_* build settings.
-        GENERATE_INFOPLIST_FILE: false
         INFOPLIST_FILE: MediaWidgetExtension/Info.plist
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
-        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
-        SWIFT_EMIT_LOC_STRINGS: true
-        SWIFT_STRICT_CONCURRENCY: minimal
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGN_ENTITLEMENTS: MediaWidgetExtension/MediaWidgetExtension.entitlements
-      configs:
-        Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-        Release:
-          SWIFT_OPTIMIZATION_LEVEL: -O
+        CODE_SIGN_ENTITLEMENTS: MediaWidgetExtension/MediaWidgetExtension$(MEDIA_WIDGET_ENTITLEMENT_SUFFIX).entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+
+  SafariExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SafariExtension
+        excludes: ["Info.plist", "*.entitlements"]
+      - path: BrowserExtension/Safari/manifest.json
+        buildPhase: resources
+      - path: BrowserExtension/Shared
+        buildPhase: resources
+      - path: MediaWidget/Browser/BrowserBridge.swift
+      - path: Shared/Constants.swift
+      - path: Shared/MediaInfo.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mediawidget.app.safari
+        INFOPLIST_FILE: SafariExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SafariExtension/SafariExtension$(MEDIA_WIDGET_ENTITLEMENT_SUFFIX).entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+
+  MediaWidgetChromeHost:
+    type: tool
+    platform: macOS
+    sources:
+      - path: ChromeNativeHost
+      - path: MediaWidget/Browser/BrowserBridge.swift
+      - path: Shared/Constants.swift
+      - path: Shared/MediaInfo.swift
+    settings:
+      base:
+        PRODUCT_NAME: MediaWidgetChromeHost
+
+schemes:
+  MediaWidget:
+    build:
+      targets:
+        MediaWidget: all
+    run:
+      config: Debug
+    archive:
+      config: Release

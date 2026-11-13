@@ -1,172 +1,65 @@
-// ScriptingPlayerSource.swift
-// MediaWidget
-//
-// Fallback now-playing source that talks to scriptable players (Music, Spotify)
-// through AppleScript.
-//
-// Why this exists: starting with recent macOS releases, `MRMediaRemoteGetNowPlayingInfo`
-// returns nothing for third-party processes (verified on macOS 26 even with a
-// team-signed app), so the private MediaRemote route alone is not enough.
-
-import Foundation
 import AppKit
 
-// MARK: - ScriptingPlayerSource
-
-/// Reads the current track from players that expose an AppleScript dictionary.
+@MainActor
 enum ScriptingPlayerSource {
-
-    // MARK: Snapshot
-
-    /// A single now-playing snapshot reported by a scriptable player.
-    struct Snapshot: Sendable {
-        let bundleID: String
-        let title: String
-        let artist: String
-        let album: String?
-        let duration: TimeInterval
-        let position: TimeInterval
-        let isPlaying: Bool
-        let artworkURL: URL?
-
-        /// Converts the snapshot into the shared `MediaInfo` model.
-        func makeMediaInfo(artwork: Data?) -> MediaInfo {
+    static func snapshots() -> [(MediaInfo, URL?)] {
+        [Constants.KnownApp.appleMusic, Constants.KnownApp.spotify].compactMap { bundleID in
+            guard isRunning(bundleID) else { return nil }
+            let spotify = bundleID == Constants.KnownApp.spotify
+            let fields = """
+            if player state is stopped then return {}
+            set t to current track
+            return {(player state as string), (name of t), (artist of t), (album of t), (duration of t as string), (player position as string), (sound volume as string)\(spotify ? ", (artwork url of t)" : "")}
+            """
+            guard let result = execute(fields, bundleID: bundleID), result.numberOfItems >= 7 else { return nil }
+            func field(_ index: Int) -> String? { result.atIndex(index)?.stringValue?.nonBlank }
+            func number(_ index: Int) -> Double? {
+                field(index).flatMap { Double($0.replacingOccurrences(of: ",", with: ".")) }.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            }
+            let duration = number(5).map { spotify ? $0 / 1000 : $0 }
+            let position = number(6)
             var capabilities: MediaCapabilities = [.canPlay, .canPause, .canNextTrack, .canPreviousTrack]
-            if duration > 0 { capabilities.insert(.canSeek) }
-            capabilities.insert(.canSetVolume)
-
-            return MediaInfo(
-                sourceID: bundleID,
-                sourceName: SourceAppInfo.info(for: bundleID).displayName,
-                title: title.isEmpty ? "未知曲目" : title,
-                artist: artist.isEmpty ? "未知艺术家" : artist,
-                album: album?.isEmpty == false ? album : nil,
-                artworkData: artwork,
-                duration: duration,
-                currentPosition: position,
-                playbackRate: isPlaying ? 1 : 0,
-                volume: nil,
-                capabilities: capabilities,
-                lastUpdated: .now,
-                positionTimestamp: .now
+            if duration ?? 0 > 0 && position != nil { capabilities.insert(.canSeek) }
+            if number(7) != nil { capabilities.insert(.canSetVolume) }
+            let info = MediaInfo(
+                sourceID: bundleID, bundleID: bundleID, sourceName: spotify ? "Spotify" : "Apple Music",
+                itemID: [field(2), field(3), field(4)].compactMap { $0 }.joined(separator: " · "),
+                title: field(2) ?? "曲名不可用", artist: field(3), album: field(4), duration: duration,
+                currentPosition: position, playbackState: field(1) == "playing" ? .playing : .paused,
+                volume: number(7).map { Float(min($0, 100) / 100) }, capabilities: capabilities
             )
+            return (info, field(8).flatMap(URL.init(string:)))
         }
     }
 
-    // MARK: Supported players
-
-    /// A player we know how to query.
-    private struct Player {
-        let bundleID: String
-        let appName: String
-        /// Returns a tab-separated snapshot, or `nil` when the player has no track loaded.
-        let script: String
-        /// Whether the player reports durations in milliseconds.
-        let durationInMilliseconds: Bool
-        let hasArtworkURL: Bool
+    static func perform(_ action: MediaCommand, bundleID: String, value: Double?) -> Bool {
+        guard isRunning(bundleID) else { return false }
+        let command: String
+        switch action {
+        case .play: command = "play"
+        case .pause: command = "pause"
+        case .next: command = "next track"
+        case .previous: command = "previous track"
+        case .seek: command = "set player position to \(Int(value ?? 0))"
+        case .volume: command = "set sound volume to \(Int((value ?? 0) * 100))"
+        case .activate: return false
+        }
+        return execute(command + "\nreturn true", bundleID: bundleID)?.booleanValue == true
     }
 
-    private static let players: [Player] = [
-        Player(
-            bundleID: "com.apple.Music",
-            appName: "Music",
-            script: """
-            tell application "Music"
-                set ps to (player state as string)
-                if ps is "stopped" then return "stopped"
-                set t to current track
-                return ps & "\\t" & (name of t) & "\\t" & (artist of t) & "\\t" & (album of t) & "\\t" & (duration of t) & "\\t" & (player position)
+    private static func isRunning(_ id: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
+    }
+
+    private static func execute(_ command: String, bundleID: String) -> NSAppleEventDescriptor? {
+        let source = """
+        with timeout of 1 second
+            tell application id "\(bundleID)"
+                \(command)
             end tell
-            """,
-            durationInMilliseconds: false,
-            hasArtworkURL: false
-        ),
-        Player(
-            bundleID: "com.spotify.client",
-            appName: "Spotify",
-            script: """
-            tell application "Spotify"
-                set ps to (player state as string)
-                if ps is "stopped" then return "stopped"
-                set t to current track
-                return ps & "\\t" & (name of t) & "\\t" & (artist of t) & "\\t" & (album of t) & "\\t" & (duration of t) & "\\t" & (player position) & "\\t" & (artwork url of t)
-            end tell
-            """,
-            durationInMilliseconds: true,
-            hasArtworkURL: true
-        ),
-    ]
-
-    // MARK: Public API
-
-    /// Returns the best snapshot across all supported players.
-    ///
-    /// A playing player always wins over a paused one; among equals the first
-    /// supported player in declaration order is used.
-    /// Must be called on the main thread (`NSAppleScript` is not reentrant).
-    @MainActor
-    static func currentSnapshot() -> Snapshot? {
-        var pausedCandidate: Snapshot?
-
-        for player in players {
-            guard isRunning(bundleID: player.bundleID) else { continue }
-            guard let snapshot = query(player) else { continue }
-
-            if snapshot.isPlaying {
-                return snapshot
-            }
-            if pausedCandidate == nil {
-                pausedCandidate = snapshot
-            }
-        }
-        return pausedCandidate
-    }
-
-    // MARK: Helpers
-
-    /// Whether an app with the given bundle identifier is currently running.
-    private static func isRunning(bundleID: String) -> Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-    }
-
-    /// Runs the player's AppleScript and parses the result.
-    @MainActor
-    private static func query(_ player: Player) -> Snapshot? {
-        guard let script = NSAppleScript(source: player.script) else { return nil }
-
-        var errorInfo: NSDictionary?
-        let result = script.executeAndReturnError(&errorInfo)
-
-        if let errorInfo {
-            NSLog("[ScriptingPlayerSource] %@ AppleScript error: %@",
-                  player.appName, String(describing: errorInfo))
-            return nil
-        }
-
-        guard let raw = result.stringValue, raw != "stopped" else { return nil }
-
-        let fields = raw.components(separatedBy: "\t")
-        guard fields.count >= 6 else { return nil }
-
-        let state = fields[0]
-        let durationRaw = Double(fields[4]) ?? 0
-        let duration = player.durationInMilliseconds ? durationRaw / 1000 : durationRaw
-        let position = Double(fields[5]) ?? 0
-
-        var artworkURL: URL?
-        if player.hasArtworkURL, fields.count >= 7, !fields[6].isEmpty {
-            artworkURL = URL(string: fields[6])
-        }
-
-        return Snapshot(
-            bundleID: player.bundleID,
-            title: fields[1],
-            artist: fields[2],
-            album: fields[3],
-            duration: duration,
-            position: position,
-            isPlaying: state == "playing",
-            artworkURL: artworkURL
-        )
+        end timeout
+        """
+        var error: NSDictionary?
+        return NSAppleScript(source: source)?.executeAndReturnError(&error)
     }
 }

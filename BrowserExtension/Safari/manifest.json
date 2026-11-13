@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "MediaWidget · B站",
+  "version": "1.1.0",
+  "description": "在本机 MediaWidget 中查看和控制 B 站视频。",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/play/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": false
+  },
+  "host_permissions": [
+    "https://www.bilibili.com/*"
+  ]
+}

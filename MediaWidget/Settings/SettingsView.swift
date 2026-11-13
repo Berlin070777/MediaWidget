@@ -1,233 +1,116 @@
-// SettingsView.swift
-// MediaWidget
-//
-// Settings window for the media widget app.
-
-import SwiftUI
+import SafariServices
 import ServiceManagement
+import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var monitor: MediaMonitor
 
     @AppStorage("showInDock") private var showInDock = false
-    @AppStorage("demoMode") private var demoMode = false
+    @AppStorage("showArtwork") private var showArtwork = true
+    @AppStorage("downloadArtwork") private var downloadArtwork = false
+    @AppStorage("reducePolling") private var reducePolling = false
+    @AppStorage("scriptedPlayers") private var scriptedPlayers = false
 
-    /// Mirrors `SMAppService.mainApp.status`; `SMAppService` can only be toggled
-    /// asynchronously, so the UI state is kept in a separate `@State`.
     @State private var launchAtLogin = false
-    @State private var launchAtLoginError: String?
+    @State private var loginError: String?
+    @State private var chromeStatus: String?
+    @State private var safariEnabled: Bool?
 
     var body: some View {
         TabView {
-            generalSettings
-                .tabItem { Label("通用", systemImage: "gear") }
-
-            aboutView
-                .tabItem { Label("关于", systemImage: "info.circle") }
+            general.tabItem { Label("通用", systemImage: "gear") }
+            sources.tabItem { Label("播放源与权限", systemImage: "play.rectangle") }
         }
-        .frame(width: 480, height: 540)
-        .onAppear(perform: syncLaunchAtLoginState)
+        .frame(width: 510, height: 500)
+        .onAppear {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            refreshSafariState()
+            monitor.refreshNowPlaying()
+        }
     }
 
-    // MARK: - General
-
-    private var generalSettings: some View {
+    private var general: some View {
         Form {
-            Section("常规") {
-                Toggle("开机时自动启动", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, newValue in
-                        applyLaunchAtLogin(newValue)
+            Section("启动与显示") {
+                Toggle("登录时启动", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { old, new in
+                        if new != (SMAppService.mainApp.status == .enabled) { setLaunchAtLogin(new) }
                     }
-
-                if let launchAtLoginError {
-                    Text(launchAtLoginError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                Toggle("在 Dock 中显示图标", isOn: $showInDock)
-                    .onChange(of: showInDock) { _, newValue in
-                        NSApp.setActivationPolicy(newValue ? .regular : .accessory)
-                    }
-
-                Toggle("演示模式（显示示例曲目）", isOn: $demoMode)
-                    .onChange(of: demoMode) { _, _ in
-                        monitor.refreshNowPlaying()
-                    }
+                if let loginError { Text(loginError).foregroundStyle(.red).font(.caption) }
+                Toggle("在程序坞中显示图标", isOn: $showInDock)
+                    .onChange(of: showInDock) { NSApp.setActivationPolicy(showInDock ? .regular : .accessory) }
+                LabeledContent("显示或隐藏悬浮面板", value: "⌘ ⇧ M")
             }
-
-            Section("快捷键") {
-                HStack {
-                    Text("显示 / 隐藏悬浮面板")
-                    Spacer()
-                    Text("⌘ ⇧ M")
-                        .font(.system(.body, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
+            Section("封面与刷新") {
+                Toggle("显示封面", isOn: $showArtwork).onChange(of: showArtwork) { monitor.refreshNowPlaying() }
+                Toggle("允许从媒体站点下载封面", isOn: $downloadArtwork)
+                    .disabled(!showArtwork)
+                    .onChange(of: downloadArtwork) { monitor.refreshNowPlaying() }
+                Text("联网时仅请求封面图片，播放状态保存在本机。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("降低客户端检测频率", isOn: $reducePolling)
+                    .onChange(of: reducePolling) { monitor.refreshNowPlaying() }
             }
-
-            Section("运行状态") {
-                statusRow(
-                    "MediaRemote 框架",
-                    ok: monitor.bridge != nil,
-                    okText: "已加载",
-                    failText: "不可用"
-                )
-                statusRow(
-                    "监控中",
-                    ok: monitor.isMonitoring,
-                    okText: "是",
-                    failText: "否"
-                )
-                HStack {
-                    Text("当前数据源")
-                    Spacer()
-                    Text(monitor.activeSourceLabel)
-                        .foregroundStyle(.secondary)
-                }
-                .font(.callout)
-
-                statusRow(
-                    "后台共享存储",
-                    ok: AppGroupStatus.isAvailable,
-                    okText: "App Group",
-                    failText: "本地文件兜底"
-                )
-                HStack {
-                    Text("当前播放源")
-                    Spacer()
-                    Text(monitor.currentMedia.isEmpty ? "—" : monitor.currentMedia.sourceName)
-                        .foregroundStyle(.secondary)
-                }
-                .font(.callout)
-
-                HStack {
-                    Text("共享数据路径")
-                    Spacer()
-                    Text(AppGroupStatus.storagePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                .font(.callout)
+            Section("小组件") {
+                LabeledContent("共享状态", value: monitor.sharedStorageError ? "写入失败" :
+                    SharedDefaults.shared.groupURL == nil ? "本机开发容器" : "App Group")
+                Text("打开通知中心，点「编辑小组件」，搜索「媒体控制」。刷新时间由 macOS 调度。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 
-    private func statusRow(_ title: String, ok: Bool, okText: String, failText: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Label(ok ? okText : failText, systemImage: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(ok ? .green : .orange)
-                .labelStyle(.titleAndIcon)
-        }
-        .font(.callout)
-    }
-
-    // MARK: - About
-
-    private var aboutView: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "play.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.tint)
-
-            Text("MediaWidget")
-                .font(.title)
-                .fontWeight(.bold)
-
-            Text("macOS 菜单栏 / 桌面媒体控制小组件")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                infoRow("版本", value: Self.appVersion)
-                infoRow("支持来源", value: "Apple Music、Spotify、网易云、QQ音乐、浏览器等")
-                infoRow("技术", value: "MediaRemote (私有框架) + WidgetKit")
+    private var sources: some View {
+        Form {
+            Section("网易云音乐与哔哩哔哩客户端") {
+                LabeledContent("辅助功能", value: monitor.accessibility ? "已授权" : "待授权")
+                Button("打开辅助功能设置") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal)
+            Section("浏览器中的 B 站") {
+                Button("配置 Chrome 扩展") {
+                    do {
+                        try ChromeRegistration.register()
+                        if let url = ChromeRegistration.extensionURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        chromeStatus = "在 Chrome 的扩展程序页面开启开发者模式，载入选中的 ChromeExtension 文件夹。"
+                    } catch { chromeStatus = "注册失败。请确认应用位于固定位置，再重试。" }
+                }
+                if let chromeStatus { Text(chromeStatus).font(.caption) }
 
-            Spacer()
-
-            Text("⚠️ 使用私有 API，仅供个人使用，不可上架 App Store")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
+                Button("打开 Safari 扩展设置") {
+                    SFSafariApplication.showPreferencesForExtension(withIdentifier: "com.mediawidget.app.safari") { _ in }
+                }
+                LabeledContent("Safari 扩展", value: safariEnabled == true ? "已启用" : "待启用")
+                Text("在 Safari 扩展设置启用 MediaWidget · B站，并允许访问 www.bilibili.com。Safari 使用同一团队签名的 App Group。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("其他播放器") {
+                Toggle("连接 Apple Music 和 Spotify", isOn: $scriptedPlayers)
+                    .onChange(of: scriptedPlayers) { monitor.refreshNowPlaying() }
+                Text("首次连接运行中的播放器时，macOS 会请求自动化权限。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
-        .padding()
+        .formStyle(.grouped)
     }
 
-    private func infoRow(_ label: String, value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .frame(width: 72, alignment: .leading)
-            Text(value)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private func refreshSafariState() {
+        SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: "com.mediawidget.app.safari") { state, _ in
+            let enabled = state?.isEnabled ?? false
+            Task { @MainActor in safariEnabled = enabled }
         }
-        .font(.callout)
     }
 
-    private static var appVersion: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(version) (\(build))"
-    }
-
-    // MARK: - Launch at Login
-
-    private func syncLaunchAtLoginState() {
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-        launchAtLoginError = nil
-    }
-
-    private func applyLaunchAtLogin(_ enabled: Bool) {
+    private func setLaunchAtLogin(_ enabled: Bool) {
         do {
-            if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
-                }
-            } else {
-                if SMAppService.mainApp.status == .enabled {
-                    try SMAppService.mainApp.unregister()
-                }
-            }
-            launchAtLoginError = nil
-        } catch {
-            launchAtLoginError = "设置失败：\(error.localizedDescription)（请先把 App 移到「应用程序」文件夹）"
-            launchAtLogin = SMAppService.mainApp.status == .enabled
-        }
-    }
-}
-
-// MARK: - Shared storage diagnostics
-
-/// Reports which shared-storage backend the app is currently using.
-enum AppGroupStatus {
-    /// `true` when the App Group container is actually available.
-    static var isAvailable: Bool {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: Constants.appGroupID
-        ) else { return false }
-        return FileManager.default.isWritableFile(atPath: container.path)
-    }
-
-    /// Human-readable location of the shared state.
-    static var storagePath: String {
-        if isAvailable {
-            return "App Group: \(Constants.appGroupID)"
-        }
-        return SharedDefaults.fallbackFileURL.path
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            loginError = nil
+        } catch { loginError = error.localizedDescription }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 }

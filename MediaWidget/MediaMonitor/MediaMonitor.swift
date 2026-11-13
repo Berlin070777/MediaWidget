@@ -1,365 +1,298 @@
-// MediaMonitor.swift
-// MediaWidget
-//
-// Central class that monitors media playback state via MediaRemote,
-// converts raw data into MediaInfo models, publishes changes via Combine,
-// and shares data with the Widget extension via SharedDefaults.
-
-import Foundation
 import AppKit
 import Combine
-
-// MARK: - MediaMonitor
+import os
+import SafariServices
 
 @MainActor
 final class MediaMonitor: ObservableObject {
-
-    // MARK: Shared Instance
-
-    /// The single monitor shared by the menu bar UI, the floating panel and the app delegate.
-    /// Creating several instances would register duplicate MediaRemote observers.
     static let shared = MediaMonitor()
 
-    // MARK: Published State
+    @Published private(set) var currentMedia = MediaInfo.empty
+    @Published private(set) var allSources: [MediaInfo] = []
+    @Published private(set) var systemAudio = SystemAudio.Snapshot()
+    @Published private(set) var accessibility = false
+    @Published private(set) var sharedStorageError = false
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var preferredSource = ""
+    @Published private(set) var isMonitoring = false
 
-    /// The currently active media item, or `.empty` if nothing is playing.
-    @Published var currentMedia: MediaInfo = .empty
+    private let controller = MediaController()
+    private let store = SharedDefaults.shared
+    private var timer: Timer?
+    private var refreshTask: Task<Void, Never>?
+    private var refreshAgain = false
+    private var sleeping = false
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var lastSnapshot: WidgetSnapshot?
+    private var artworkTasks: Set<URL> = []
+    private var artworkAttempts: [URL: Date] = [:]
+    private var scriptedSources: [(MediaInfo, URL?)] = []
+    private var scriptPoll = Date.distantPast
+    private static let logger = Logger(subsystem: "com.mediawidget.app", category: "Monitor")
 
-    /// All detected media sources (for future multi-source switching).
-    @Published var allSources: [MediaInfo] = []
+    var showArtwork: Bool { UserDefaults.standard.object(forKey: "showArtwork") as? Bool ?? true }
 
-    /// Whether the monitor is actively listening for changes.
-    @Published var isMonitoring: Bool = false
-
-    /// Human-readable label of the source that produced the current snapshot.
-    /// MediaRemote is unusable on recent macOS releases, so this tells the user
-    /// which fallback is in charge.
-    @Published var activeSourceLabel: String = "—"
-
-    // MARK: Internal Properties
-
-    /// Bridge to the MediaRemote private framework. `nil` if the framework could not be loaded.
-    let bridge: MediaRemoteBridge?
-
-    // MARK: Private Properties
-
-    /// Timer that refreshes elapsed time while playback is active.
-    private var refreshTimer: Timer?
-
-    /// Shared UserDefaults for passing media data to the Widget extension.
-    private let sharedDefaults = SharedDefaults()
-
-    /// Notification center observers kept for cleanup.
-    private var observers: [NSObjectProtocol] = []
-
-    /// The interval (in seconds) at which elapsed time is refreshed during playback.
-    private let refreshInterval: TimeInterval = 5.0
-
-    /// Last time the shared store was written, used to throttle widget reloads.
-    private var lastSharedWrite: Date = .distantPast
-
-    /// Whether demo mode is active. When enabled, the UI shows a sample track so
-    /// the interface can be inspected without a real player running.
-    /// Toggle with: `defaults write com.mediawidget.app demoMode -bool YES`
-    var isDemoModeEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "demoMode")
-    }
-
-    // MARK: - Initializer
-
-    init() {
-        let loadedBridge = MediaRemoteBridge()
-        if loadedBridge != nil {
-            self.bridge = loadedBridge
-        } else {
-            self.bridge = nil
-            print("[MediaMonitor] ⚠️ MediaRemoteBridge failed to load – media monitoring is unavailable.")
-        }
-    }
-
-    // No `deinit`: `MediaMonitor` is `@MainActor`-isolated and lives for the whole app
-    // lifetime. Notification observers and the refresh timer are torn down by
-    // `stopMonitoring()`, which is called from `shutdown()` on app termination.
-
-    // MARK: - Public API
-
-    /// Begin listening for media playback changes. Safe to call multiple times.
     func startMonitoring() {
         guard !isMonitoring else { return }
-        guard let bridge else {
-            print("[MediaMonitor] Cannot start monitoring – bridge is nil.")
-            return
-        }
-
         isMonitoring = true
-
-        // 1. Ask MediaRemote to start sending notifications.
-        bridge.registerForNotifications()
-
-        // 2. Observe the three key notifications using the actual notification names from the bridge.
-        let center = NotificationCenter.default
-
-        let notificationNames = [
-            bridge.nowPlayingInfoDidChangeNotification,
-            bridge.nowPlayingApplicationDidChangeNotification,
-            bridge.nowPlayingApplicationIsPlayingDidChangeNotification
-        ]
-
-        for name in notificationNames {
-            let observer = center.addObserver(
-                forName: name,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
+                     NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+            workspaceObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let name = note.name
                 Task { @MainActor [weak self] in
-                    self?.refreshNowPlaying()
+                    guard let self else { return }
+                    if name == NSWorkspace.willSleepNotification {
+                        sleeping = true
+                        timer?.invalidate()
+                        refreshTask?.cancel()
+                        publish(.empty, force: true)
+                    } else if name == NSWorkspace.didWakeNotification {
+                        sleeping = false
+                        refreshNowPlaying()
+                    } else {
+                        refreshNowPlaying()
+                    }
                 }
-            }
-            observers.append(observer)
+            })
         }
-
-        // 3. MediaRemote no longer delivers now-playing notifications on recent macOS
-        //    releases, so poll the fallback sources on a timer as well.
-        startRefreshTimer()
-
-        // 4. Do the initial fetch.
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterAddObserver(center, Unmanaged.passUnretained(self).toOpaque(), { _, pointer, _, _, _ in
+            guard let pointer else { return }
+            let monitor = Unmanaged<MediaMonitor>.fromOpaque(pointer).takeUnretainedValue()
+            Task { @MainActor in monitor.readWidgetCommands() }
+        }, Constants.commandNotification as CFString, nil, .deliverImmediately)
         refreshNowPlaying()
     }
 
-    /// Stop listening for media playback changes.
     func stopMonitoring() {
-        guard isMonitoring else { return }
         isMonitoring = false
-
-        for observer in observers {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        observers.removeAll()
-
-        stopRefreshTimer()
+        timer?.invalidate()
+        timer = nil
+        refreshTask?.cancel()
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        workspaceObservers.removeAll()
+        CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                                Unmanaged.passUnretained(self).toOpaque())
+        publish(.empty, force: true)
     }
 
-    /// Manually trigger a refresh of the now-playing state.
     func refreshNowPlaying() {
-        guard let bridge else {
-            // No MediaRemote at all – go straight to the per-app fallback sources.
-            resolveFallback()
+        guard isMonitoring, !sleeping else { return }
+        if refreshTask != nil {
+            refreshAgain = true
             return
         }
+        let apps = NSWorkspace.shared.runningApplications.reduce(into: [String: pid_t]()) { result, app in
+            if let id = app.bundleIdentifier { result[id] = app.processIdentifier }
+        }
+        let readArtwork = showArtwork
+        refreshTask = Task {
+            let reading = await controller.read(processes: apps, readArtwork: readArtwork)
+            refreshTask = nil
+            guard !Task.isCancelled, isMonitoring, !sleeping else {
+                if refreshAgain {
+                    refreshAgain = false
+                    refreshNowPlaying()
+                }
+                return
+            }
+            if accessibility != reading.accessibility { accessibility = reading.accessibility }
+            if reading.systemAudio != systemAudio { systemAudio = reading.systemAudio }
+            var sources = reading.sources
+            var urls = reading.artworkURLs
+            if UserDefaults.standard.bool(forKey: "scriptedPlayers") {
+                if Date.now.timeIntervalSince(scriptPoll) >= 8 {
+                    scriptedSources = ScriptingPlayerSource.snapshots()
+                    scriptPoll = .now
+                }
+                for (var media, url) in scriptedSources where apps[media.bundleID] != nil {
+                    if readArtwork, let url {
+                        media.artworkData = ArtworkCache.cached(url)
+                        urls[media.sourceID] = url
+                    }
+                    sources.append(media)
+                }
+            } else {
+                scriptedSources = []
+                scriptPoll = .distantPast
+            }
 
-        // Fetch PID first, then info, then playing state
-        bridge.getNowPlayingAppPID { [weak self] pid in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+            let ordered = sources.sorted(by: sourceOrder)
+            if allSources != ordered { allSources = ordered }
+            updateSelection()
+            if readArtwork, UserDefaults.standard.bool(forKey: "downloadArtwork"),
+               let url = urls[currentMedia.sourceID], currentMedia.artworkData == nil {
+                requestArtwork(url)
+            }
+            if !preferredSource.isEmpty && !allSources.contains(where: { $0.sourceID == preferredSource }) {
+                preferredSource = ""
+            }
+            readWidgetCommands()
+            if refreshAgain {
+                refreshAgain = false
+                refreshNowPlaying()
+            } else {
+                scheduleNextPoll()
+            }
+        }
+    }
 
-                self.bridge?.getNowPlayingInfo { [weak self] info in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
+    func chooseSource(_ id: String) {
+        preferredSource = id
+        updateSelection()
+        refreshNowPlaying()
+    }
 
-                        self.bridge?.getIsPlaying { [weak self] isPlaying in
-                            Task { @MainActor [weak self] in
-                                guard let self else { return }
+    func submit(_ action: MediaCommand, for media: MediaInfo) {
+        guard [.play, .pause, .next, .previous, .activate].contains(action) else { return }
+        send(action, for: media, value: nil)
+    }
 
-                                var mediaInfo: MediaInfo
-                                if !info.isEmpty {
-                                    mediaInfo = self.convertToMediaInfo(
-                                        from: info,
-                                        pid: pid,
-                                        isPlaying: isPlaying
-                                    )
-                                } else {
-                                    mediaInfo = .empty
-                                }
+    func seek(_ position: Double, for media: MediaInfo) {
+        guard let duration = media.duration, position.isFinite, media.capabilities.contains(.canSeek) else { return }
+        send(.seek, for: media, value: min(max(0, position), duration))
+    }
 
-                                // Demo mode overrides real state so the UI can be previewed.
-                                if self.isDemoModeEnabled {
-                                    self.applyMediaInfo(.demo)
-                                    return
-                                }
+    func setMediaVolume(_ volume: Double, for media: MediaInfo) {
+        guard volume.isFinite, media.capabilities.contains(.canSetVolume) else { return }
+        send(.volume, for: media, value: min(max(0, volume), 1))
+    }
 
-                                if mediaInfo.isEmpty {
-                                    // MediaRemote returned nothing – fall back to the
-                                    // per-app sources (AppleScript players / NeteaseMusic).
-                                    self.resolveFallback()
-                                } else {
-                                    self.activeSourceLabel = "MediaRemote"
-                                    self.applyMediaInfo(mediaInfo)
-                                }
-                            }
+    func setSystemVolume(_ volume: Double) {
+        if !SystemAudio.setVolume(Float(volume)) { errorMessage = "当前输出设备无法调节音量" }
+        systemAudio = SystemAudio.snapshot()
+    }
+
+    func toggleSystemMute() {
+        if !SystemAudio.toggleMute() { errorMessage = "当前输出设备无法切换静音" }
+        systemAudio = SystemAudio.snapshot()
+    }
+
+    private func send(_ action: MediaCommand, for media: MediaInfo, value: Double?) {
+        errorMessage = nil
+        guard let target = allSources.first(where: { $0.sourceID == media.sourceID && $0.itemID == media.itemID }),
+              abs(target.lastUpdated.timeIntervalSinceNow) < (BrowserKind.kind(for: target.sourceID)?.snapshotLifetime ?? 30),
+              target.capabilities.contains(action.capability) else {
+            errorMessage = "媒体来源已变更"
+            return
+        }
+        let app = NSRunningApplication.runningApplications(withBundleIdentifier: media.bundleID).first
+        if action == .activate {
+            guard let app, app.activate() else {
+                errorMessage = "无法打开来源应用"
+                return
+            }
+            if media.bundleID != Constants.KnownApp.bilibili && BrowserKind.kind(for: media.sourceID) == nil { return }
+        }
+        Task {
+            let sent: Bool
+            if [Constants.KnownApp.appleMusic, Constants.KnownApp.spotify].contains(media.bundleID) {
+                sent = ScriptingPlayerSource.perform(action, bundleID: media.bundleID, value: value)
+            } else {
+                sent = await controller.perform(action, media: target, pid: app?.processIdentifier, value: value)
+            }
+            if sent && BrowserKind.kind(for: media.sourceID) == .safari,
+               let document = media.sourceID.split(separator: ":").last?.suffix(36),
+               let id = UUID(uuidString: String(document)) {
+                SFSafariApplication.dispatchMessage(withName: "mediawidget-refresh",
+                    toExtensionWithIdentifier: "com.mediawidget.app.safari",
+                    userInfo: ["documentID": id.uuidString.lowercased()]) { error in
+                        if let error {
+                            Self.logger.debug("Safari wake-up: \(error.localizedDescription, privacy: .private)")
                         }
                     }
-                }
             }
-        }
-    }
-
-    // MARK: - Fallback Sources
-
-    /// Resolves now-playing state from non-MediaRemote sources.
-    ///
-    /// Priority: a *playing* source always wins over a paused one, so a paused
-    /// Music.app never masks a track that NeteaseMusic is actually playing.
-    private func resolveFallback() {
-        // AppleScript must run on the main thread; the SQLite read is cheap enough
-        // to do inline.
-        let scripting = ScriptingPlayerSource.currentSnapshot()
-        let netease = NeteaseMusicSource.isAppRunning ? NeteaseMusicSource.currentTrack() : nil
-
-        if let scripting, scripting.isPlaying {
-            applyScripting(scripting)
-        } else if let netease, netease.isPlaying {
-            applyNetease(netease)
-        } else if let scripting {
-            applyScripting(scripting)
-        } else if let netease {
-            applyNetease(netease)
-        } else {
-            activeSourceLabel = "—"
-            applyMediaInfo(.empty)
-        }
-    }
-
-    /// Applies a snapshot from a scriptable player, fetching artwork when needed.
-    private func applyScripting(_ snapshot: ScriptingPlayerSource.Snapshot) {
-        activeSourceLabel = "AppleScript · Music / Spotify"
-        let artworkKey = snapshot.artworkURL?.lastPathComponent
-        let artwork = artworkKey.flatMap { ArtworkCache.cachedData(for: $0) }
-        applyMediaInfo(snapshot.makeMediaInfo(artwork: artwork))
-
-        guard artwork == nil, let artworkKey, let url = snapshot.artworkURL else { return }
-        ArtworkCache.load(url: url, key: artworkKey) { [weak self] data in
-            guard data != nil else { return }
-            Task { @MainActor [weak self] in
-                self?.refreshNowPlaying()
+            if !sent && action != .activate {
+                Self.logger.notice("Source did not accept action \(action.rawValue, privacy: .public)")
+                errorMessage = "来源没有接受该操作"
             }
+            try? await Task.sleep(for: .milliseconds(450))
+            scriptPoll = .distantPast
+            refreshNowPlaying()
         }
     }
 
-    /// Applies a track read from NeteaseMusic's history, fetching artwork when needed.
-    private func applyNetease(_ track: NeteaseMusicSource.Track) {
-        activeSourceLabel = "网易云音乐 · 本地播放记录"
-        let artwork = ArtworkCache.cachedData(for: track.cacheKey)
-        applyMediaInfo(track.makeMediaInfo(artwork: artwork))
-
-        guard artwork == nil, let url = track.artworkURL else { return }
-        ArtworkCache.load(url: url, key: track.cacheKey) { [weak self] data in
-            guard data != nil else { return }
-            Task { @MainActor [weak self] in
-                self?.refreshNowPlaying()
+    private func readWidgetCommands() {
+        guard isMonitoring, !sleeping else { return }
+        for command in store.takeCommands() {
+            guard [.play, .pause, .previous, .next, .activate].contains(command.action),
+                  currentMedia.sourceID == command.sourceID, currentMedia.itemID == command.itemID,
+                  !currentMedia.isEmpty else {
+                Self.logger.notice("Widget command discarded because the source changed")
+                store.requestWidgetReload()
+                continue
             }
+            Self.logger.notice("Routing widget action \(command.action.rawValue, privacy: .public) to \(self.currentMedia.bundleID, privacy: .public)")
+            send(command.action, for: currentMedia, value: nil)
         }
     }
 
-    /// Applies a media snapshot to the published state and, when something
-    /// *meaningful* changed, to the shared store.
-    ///
-    /// `MediaInfo` carries `lastUpdated` / `positionTimestamp`, which change on every
-    /// poll. Writing and reloading the widget on those alone would trigger a widget
-    /// reload every few seconds, so only real changes (track, source, play state,
-    /// artwork) hit the disk and WidgetKit.
-    private func applyMediaInfo(_ mediaInfo: MediaInfo) {
-        let previous = currentMedia
-        let isFirstWrite = previous.isEmpty && !mediaInfo.isEmpty
-        let significantChange = isFirstWrite
-            || previous.sourceID != mediaInfo.sourceID
-            || previous.title != mediaInfo.title
-            || previous.artist != mediaInfo.artist
-            || previous.album != mediaInfo.album
-            || previous.isPlaying != mediaInfo.isPlaying
-            || abs(previous.duration - mediaInfo.duration) > 0.5
-            || previous.artworkData?.count != mediaInfo.artworkData?.count
-
-        currentMedia = mediaInfo
-        allSources = mediaInfo.isEmpty ? [] : [mediaInfo]
-
-        // Always write on a real change; otherwise throttle to one write per 20 s so
-        // the widget's progress bar stays accurate without being reloaded every poll.
-        let now = Date()
-        guard significantChange || now.timeIntervalSince(lastSharedWrite) > 20 else { return }
-        lastSharedWrite = now
-
-        sharedDefaults.save(mediaInfo: mediaInfo)
-        sharedDefaults.requestWidgetReload()
+    private func updateSelection() {
+        let selected = allSources.first { $0.sourceID == preferredSource }
+            ?? allSources.first(where: \.isPlaying)
+            ?? allSources.first(where: { !$0.capabilities.isEmpty })
+            ?? allSources.first
+            ?? .empty
+        if currentMedia != selected { currentMedia = selected }
+        publish(selected)
     }
 
-    // MARK: - Timer Management
+    private func sourceOrder(_ lhs: MediaInfo, _ rhs: MediaInfo) -> Bool {
+        let priority = [Constants.KnownApp.neteaseMusic, Constants.KnownApp.bilibili,
+                        Constants.KnownApp.safari, Constants.KnownApp.chrome,
+                        Constants.KnownApp.appleMusic, Constants.KnownApp.spotify]
+        let left = priority.firstIndex(of: lhs.bundleID) ?? priority.count
+        let right = priority.firstIndex(of: rhs.bundleID) ?? priority.count
+        return left == right ? lhs.sourceID < rhs.sourceID : left < right
+    }
 
-    /// Start a repeating timer that refreshes elapsed time while playback is active.
-    private func startRefreshTimer() {
-        guard refreshTimer == nil else { return }
-
-        refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: refreshInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshNowPlaying()
+    private func publish(_ media: MediaInfo, force: Bool = false) {
+        let now = Date.now
+        let artwork = showArtwork
+        let previous = lastSnapshot?.media ?? .empty
+        let changed = lastSnapshot == nil || lastSnapshot?.showArtwork != artwork ||
+            previous.sourceID != media.sourceID || previous.itemID != media.itemID ||
+            previous.title != media.title || previous.artist != media.artist || previous.album != media.album ||
+            previous.playbackState != media.playbackState || previous.capabilities != media.capabilities ||
+            previous.duration != media.duration || previous.volume != media.volume || previous.artworkData != media.artworkData ||
+            previous.playbackRate != media.playbackRate || (previous.currentPosition == nil) != (media.currentPosition == nil) ||
+            abs((previous.position(at: now) ?? 0) - (media.position(at: now) ?? 0)) > 4
+        let heartbeat = !media.isEmpty && now.timeIntervalSince(lastSnapshot?.writtenAt ?? .distantPast) >= 25
+        guard changed || heartbeat || force else { return }
+        let snapshot = WidgetSnapshot(media: media, writtenAt: now, showArtwork: artwork)
+        do {
+            try store.save(snapshot)
+            lastSnapshot = snapshot
+            if sharedStorageError { sharedStorageError = false }
+            if changed || force { store.requestWidgetReload() }
+        } catch {
+            if !sharedStorageError {
+                Self.logger.error("Widget snapshot write failed: \(error.localizedDescription, privacy: .private)")
             }
+            sharedStorageError = true
         }
-        refreshTimer?.tolerance = 1.0
     }
 
-    /// Invalidate the refresh timer.
-    private func stopRefreshTimer() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+    private func scheduleNextPoll() {
+        timer?.invalidate()
+        let slow = UserDefaults.standard.bool(forKey: "reducePolling")
+        let interval: TimeInterval = slow ? 8 : 3
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshNowPlaying() }
+        }
+        timer?.tolerance = 0.5
     }
 
-    // MARK: - Data Conversion
-
-    /// Convert raw MediaRemote info dictionary into a `MediaInfo` model.
-    private func convertToMediaInfo(
-        from info: [String: Any],
-        pid: Int32,
-        isPlaying: Bool
-    ) -> MediaInfo {
-
-        // --- Source Application ---
-        var bundleIdentifier = ""
-        var appName = "未知应用"
-
-        if pid > 0, let app = NSRunningApplication(processIdentifier: pid) {
-            bundleIdentifier = app.bundleIdentifier ?? ""
-            appName = app.localizedName ?? app.bundleIdentifier ?? "未知应用"
+    private func requestArtwork(_ url: URL) {
+        let now = Date.now
+        artworkAttempts = artworkAttempts.filter { now.timeIntervalSince($0.value) < 300 }
+        guard artworkAttempts[url] == nil, artworkTasks.insert(url).inserted else { return }
+        artworkAttempts[url] = now
+        Task {
+            let downloaded = await ArtworkCache.download(url)
+            artworkTasks.remove(url)
+            if downloaded { refreshNowPlaying() }
         }
-
-        let sourceAppInfo = SourceAppInfo.info(for: bundleIdentifier)
-
-        // --- Media Metadata ---
-        let title = info["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? ""
-        let artist = info["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? ""
-        let album = info["kMRMediaRemoteNowPlayingInfoAlbum"] as? String
-
-        // --- Artwork ---
-        let artworkData = info["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data
-
-        // --- Playback Timing ---
-        let duration = info["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0.0
-        let elapsedTime = info["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0.0
-        let playbackRate = info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0.0
-
-        // --- Capabilities ---
-        var capabilities: MediaCapabilities = [.canPlay, .canPause, .canNextTrack, .canPreviousTrack]
-        if duration > 0 {
-            capabilities.insert(.canSeek)
-        }
-        capabilities.insert(.canSetVolume)
-
-        let now = Date()
-        return MediaInfo(
-            sourceID: bundleIdentifier,
-            sourceName: sourceAppInfo.displayName,
-            title: title.isEmpty ? "未知曲目" : title,
-            artist: artist.isEmpty ? "未知艺术家" : artist,
-            album: album,
-            artworkData: artworkData,
-            duration: duration,
-            currentPosition: elapsedTime,
-            playbackRate: isPlaying ? max(playbackRate, 1.0) : 0.0,
-            volume: nil,
-            capabilities: capabilities,
-            lastUpdated: now,
-            positionTimestamp: now
-        )
     }
 }

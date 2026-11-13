@@ -27,13 +27,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         registerGlobalHotKey()
+        if hotKeyRef == nil {
+            NSLog("[MediaWidget] ⌘⇧M is unavailable. The menu bar and mediawidget://panel can still open the panel.")
+        }
 
         // Start listening immediately instead of waiting for the menu bar popover
         // to appear, so the widget and the floating panel always have fresh data.
         MediaMonitor.shared.startMonitoring()
-
-        // Nudge the widgets so they pick up the freshly written shared state.
-        SharedDefaults.shared.requestWidgetReload()
 
         // Development convenience:
         //   defaults write com.mediawidget.app showPanelOnLaunch -bool YES
@@ -41,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.presentFloatingPanel()
             }
+        }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        if urls.contains(where: { $0.scheme == "mediawidget" && $0.host == "panel" }) {
+            presentFloatingPanel()
         }
     }
 
@@ -128,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Shows or hides the floating panel.
     func toggleFloatingPanel() {
-        if let panel = floatingPanel, panel.isVisible {
+        if let panel = floatingPanel, panel.isVisible, !panel.isMiniaturized {
             panel.orderOut(nil)
         } else {
             presentFloatingPanel()
@@ -137,9 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Brings the floating panel on screen, creating it on first use.
     func presentFloatingPanel() {
-        let panel = floatingPanel ?? makeFloatingPanel()
-        floatingPanel = panel
-        panel.center()
+        if floatingPanel == nil {
+            floatingPanel = makeFloatingPanel()
+            floatingPanel?.center()
+        }
+        guard let panel = floatingPanel else { return }
+        if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -159,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeFloatingPanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 370),
+            contentRect: NSRect(x: 0, y: 0, width: 365, height: 430),
             // Native macOS traffic lights (close / miniaturize / zoom).
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -173,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.standardWindowButton(.closeButton)?.isHidden = false
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = false
         panel.standardWindowButton(.zoomButton)?.isHidden = false
-        panel.minSize = NSSize(width: 320, height: 300)
+        panel.minSize = NSSize(width: 320, height: 360)
         panel.delegate = self
         panel.isMovableByWindowBackground = true
         panel.isOpaque = false

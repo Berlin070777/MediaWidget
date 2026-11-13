@@ -12,7 +12,7 @@ struct MediaWidgetApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(monitor: mediaMonitor)
+            MenuBarView(monitor: mediaMonitor, showPanel: { appDelegate.presentFloatingPanel() })
         } label: {
             Image(systemName: mediaMonitor.currentMedia.isPlaying ? "play.fill" : "play")
         }

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "MediaWidget · B站",
+  "version": "1.1.0",
+  "description": "在本机 MediaWidget 中查看和控制 B 站视频。",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/play/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3RZ2VJlZbTlWiGDwDq+/D8HdrbELY5O4X6SBGz1GjC/cX6bqkHoETEQtY0R0xLZEo48WY0dchCLkYrWcnMYijdik8eGLaffUBZ+vdHZDLhaXj4UyPeRY0j53756dtZck9fVkTvn838+DfmI7Pbd1rFBi8NvK+/T7j3ZUpJsXk7bROFd4waJji0rdbzcJDio51Qs10DNW30cLbaeonfAWmAQJTDFR2Px7VFZ/JdXUOliGmHO7iimr6EkOxXcfwd696NKq3yf8P9hvMGHEIJHPkTOoN2EWDvLIAk59MIf/ynoDT0ly3lCJsonPMf3/freItMTV2tQ8eYv3jOJeMoPSAwIDAQAB",
+  "background": {
+    "service_worker": "background.js"
+  }
+}

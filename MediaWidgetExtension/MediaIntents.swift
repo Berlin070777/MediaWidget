@@ -1,108 +1,62 @@
-// MediaIntents.swift
-// MediaWidgetExtension
-//
-// AppIntents for widget button interactions. These intents load the private
-// MediaRemote framework directly (the widget extension runs in a separate process
-// and cannot access the main app's MediaMonitor).
-
 import AppIntents
-import WidgetKit
+import Foundation
+import os
 
-#if canImport(AppKit)
-import AppKit
-#endif
-
-// MARK: - Shared Helpers
-
-/// Sends a MediaRemote command by loading the framework in-process.
-/// Reloads the widget timeline after sending.
-private func sendMediaRemoteCommand(_ commandValue: UInt32) {
-    typealias SendCommandFunc = @convention(c) (UInt32, UnsafeRawPointer?) -> Bool
-
-    let frameworkPath = "/System/Library/PrivateFrameworks/MediaRemote.framework"
-    guard let frameworkURL = CFURLCreateWithFileSystemPath(
-        kCFAllocatorDefault,
-        frameworkPath as CFString,
-        .cfurlposixPathStyle,
-        true
-    ) else { return }
-
-    guard let bundle = CFBundleCreate(kCFAllocatorDefault, frameworkURL) else { return }
-    guard CFBundleLoadExecutable(bundle) else { return }
-
-    guard let ptr = CFBundleGetFunctionPointerForName(bundle, "MRMediaRemoteSendCommand" as CFString) else {
-        return
-    }
-
-    let sendCommand = unsafeBitCast(ptr, to: SendCommandFunc.self)
-    _ = sendCommand(commandValue, nil)
-
-    // Give the system a moment to update now-playing info, then reload.
-    WidgetCenter.shared.reloadTimelines(ofKind: Constants.WidgetKind.mediaControl)
+enum WidgetPlaybackAction: String, AppEnum {
+    case play, pause, next, previous, activate
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "媒体操作"
+    static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+        .play: "播放", .pause: "暂停", .next: "下一项", .previous: "上一项", .activate: "打开来源"
+    ]
 }
 
-// MARK: - Toggle Play/Pause Intent
+struct WidgetPlaybackIntent: AppIntent {
+    private static let logger = Logger(subsystem: "com.mediawidget.app", category: "WidgetCommand")
+    static let title: LocalizedStringResource = "控制媒体"
+    static let description = IntentDescription("控制小组件上显示的媒体来源")
+    static let isDiscoverable = false
 
-struct TogglePlayPauseIntent: AppIntent {
-    static let title: LocalizedStringResource = "播放/暂停"
-    static let description: IntentDescription = IntentDescription("切换播放/暂停状态")
+    @Parameter(title: "来源") var source: String
+    @Parameter(title: "媒体") var item: String?
+    @Parameter(title: "操作") var action: WidgetPlaybackAction
 
-    func perform() async throws -> some IntentResult {
-        sendMediaRemoteCommand(Constants.MediaRemoteCommand.togglePlayPause)
-        return .result()
-    }
-}
+    init() {}
 
-// MARK: - Next Track Intent
-
-struct NextTrackIntent: AppIntent {
-    static let title: LocalizedStringResource = "下一曲"
-    static let description: IntentDescription = IntentDescription("跳到下一首曲目")
-
-    func perform() async throws -> some IntentResult {
-        sendMediaRemoteCommand(Constants.MediaRemoteCommand.nextTrack)
-        return .result()
-    }
-}
-
-// MARK: - Previous Track Intent
-
-struct PreviousTrackIntent: AppIntent {
-    static let title: LocalizedStringResource = "上一曲"
-    static let description: IntentDescription = IntentDescription("跳到上一首曲目")
-
-    func perform() async throws -> some IntentResult {
-        sendMediaRemoteCommand(Constants.MediaRemoteCommand.previousTrack)
-        return .result()
-    }
-}
-
-// MARK: - Open Source App Intent
-
-struct OpenSourceAppIntent: AppIntent {
-    static let title: LocalizedStringResource = "打开来源应用"
-    static let description: IntentDescription = IntentDescription("打开正在播放媒体的应用")
-    static let openAppWhenRun: Bool = false
-
-    @Parameter(title: "Bundle ID")
-    var bundleID: String
-
-    init() {
-        self.bundleID = ""
-    }
-
-    init(bundleID: String) {
-        self.bundleID = bundleID
+    init(_ action: WidgetPlaybackAction, media: MediaInfo) {
+        self.action = action
+        source = media.sourceID
+        item = media.itemID
     }
 
     func perform() async throws -> some IntentResult {
-        #if canImport(AppKit)
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        let store = SharedDefaults.shared
+        Self.logger.notice("Widget intent invoked: \(self.action.rawValue, privacy: .public)")
+        guard let command = MediaCommand(rawValue: action.rawValue),
+              let snapshot = store.snapshot(), snapshot.isFresh,
+              snapshot.media.sourceID == source, snapshot.media.itemID == item,
+              snapshot.media.capabilities.contains(command.capability) else {
+            Self.logger.notice("Widget intent ignored because the snapshot or target was stale")
+            store.requestWidgetReload()
+            return .result()
         }
-        #endif
+        let request = WidgetCommand(id: UUID(), sourceID: source, itemID: item, action: command, issuedAt: .now)
+        do {
+            try store.enqueue(request)
+            Self.logger.notice("Widget command enqueued")
+        } catch {
+            Self.logger.error("Widget command write failed: \(error.localizedDescription, privacy: .private)")
+            throw error
+        }
+        // Give the resident app time to publish the resulting state before WidgetKit
+        // asks for the next timeline. The browser bridge can take a heartbeat.
+        if command == .play || command == .pause {
+            let expected: PlaybackState = command == .play ? .playing : .paused
+            for _ in 0..<14 {
+                if let current = store.snapshot()?.media,
+                   current.sourceID != source || current.itemID != item || current.playbackState == expected { break }
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
         return .result()
     }
 }

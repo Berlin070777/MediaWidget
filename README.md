@@ -1,249 +1,65 @@
 # MediaWidget
 
-> 一个常驻 macOS 菜单栏 / 桌面的流媒体播放状态小组件 —— 实时显示当前在播内容，并提供播放控制。
+macOS 菜单栏应用和通知中心小组件，支持检测及控制网易云音乐、哔哩哔哩客户端，以及 Chrome 和 Safari 的 B 站视频。菜单栏和悬浮面板能切换当前控制来源。缺失的字段显示「不可用」。
 
-基于 **SwiftUI + WidgetKit + MediaRemote**，通过私有框架读取系统「正在播放」信息，在主 App 与 Widget 扩展之间共享状态。
+## 在本机使用
 
-当前状态：**可编译、可运行**（Xcode 26.2 / Swift 6 严格并发，macOS 14.0+）。
+1. 在此 Mac 上打开「应用程序」中的 `MediaWidget.app`。自行构建时，运行 `build/Build/Products/Release/MediaWidget.app` 或把它安装到固定位置，只保留一个运行实例。
+2. 在菜单栏打开控制界面，或按 **⌘⇧M** 打开悬浮面板。面板也可由 `open 'mediawidget://panel'` 打开。
+3. 在「系统设置 → 隐私与安全性 → 辅助功能」添加并启用这个构建位置的 MediaWidget，随后打开网易云或哔哩哔哩客户端开始播放。应用保持在菜单栏时，小组件持续接收快照。
+4. 点屏幕右上角日期时间，或用两指从触控板右边缘向左滑打开通知中心。点击底部「编辑小组件」，搜索「媒体控制」或「MediaWidget」，选中号或大号。桌面右键菜单也可添加。
+5. 播放多个来源时，在菜单栏或悬浮面板的「播放源」菜单里选择；「自动选择」优先显示正在播放的来源，同状态下按网易云、B 站客户端、Safari、Chrome、Apple Music、Spotify 排序。点击标题打开来源。
 
-| 桌面小组件（中） | 桌面小组件（大） |
-|---|---|
-| ![中等小组件](docs/widget-medium.png) | ![大号小组件](docs/widget-large.png) |
+### Chrome
 
-| 桌面小组件（小） | 悬浮控制面板（⌘⇧M） | 设置面板 |
-|---|---|---|
-| ![小号小组件](docs/widget-small.png) | ![悬浮面板](docs/floating-panel.png) | ![设置](docs/settings.png) |
+1. 在 MediaWidget 设置的「播放源与权限」点「配置 Chrome 扩展」。它会写入当前用户的 Native Messaging host 清单，并在访达中定位打包好的 `ChromeExtension` 目录。
+2. 打开 `chrome://extensions`，开启开发者模式，点「加载已解压的扩展程序」，选择上述目录。
+3. 打开或刷新 `www.bilibili.com/video/…` 或 `www.bilibili.com/bangumi/play/…` 页面。移动 App 后，重新配置 Chrome 并重载扩展目录。使用自定义 `--user-data-dir` 时，Chrome 从对应目录下的 `NativeMessagingHosts` 查找清单。
 
----
+### Safari
 
-## ✨ 功能特性
+1. 使用带 App Group 的签名版。设置中点「打开 Safari 扩展设置」，或进入「Safari → 设置 → 扩展」。
+2. 启用「MediaWidget · B站」。在该扩展的「编辑网站」中把 `bilibili.com` 设为「允许」，或在 B 站页通过工具栏扩展菜单授权此网站。
+3. 刷新 B 站视频页并播放。在独立 Safari 用户场景中，按其权限设置启用扩展。
 
-| 模块 | 说明 | 状态 |
-|---|---|---|
-| 菜单栏常驻 | `MenuBarExtra` 弹出面板，图标随播放状态变化 | ✅ |
-| 播放信息展示 | 标题 / 艺术家 / 专辑 / 封面 / 进度 / 音量 | ✅ |
-| 播放控制 | 播放·暂停 / 上一曲 / 下一曲 / 拖动进度 / 音量±/静音 | ✅ |
-| 悬浮面板 | `⌘⇧M` 呼出毛玻璃浮动窗口，原生红绿灯（可关闭/最小化/缩放）、置顶所有空间、可拖动 | ✅ |
-| 多数据源检测 | MediaRemote → AppleScript（Music/Spotify）→ 网易云本地记录，逐级兜底 | ✅ |
-| 桌面小组件 | WidgetKit，支持 `.systemSmall / .systemMedium / .systemLarge`，带 AppIntent 控制按钮 | ✅ |
-| 设置面板 | 开机自启（`SMAppService`）、Dock 显示、快捷键、运行状态诊断 | ✅ |
-| 演示模式 | 无播放器时用示例曲目预览完整 UI（设置内开关） | ✅ |
-| 多音源切换 UI | 多个播放器同时在播时自动择「正在播放」者，手动切换 UI 待做 | 🚧 |
-| 主题 / 封面开关 | 常量与 Key 已预留 | 🚧 |
+### 可选权限
 
-### 已知支持的应用
+- 网易云和哔哩哔哩客户端使用辅助功能。若 macOS 提示访问其他 App 的数据，该授权只影响读取网易云本地 SQLite 曲目信息，菜单播放控制可以独立使用。
+- Apple Music 和 Spotify 集成默认关闭。打开后，只对正在运行的播放器发出 Apple Events，并由 macOS 请求对应的「自动化」权限。
+- 封面下载默认关闭。打开后，仅在需要时请求媒体站点的图片 CDN，并将缩略图缓存到本机。
+- 「登录时启动」使用 `SMAppService`。需要固定安装位置时，可把签名 App 放入「应用程序」。
+- 可在已经安装的手势工具中把手势映射到 `⌘⇧M` 或 `mediawidget://panel`。MediaWidget 直接通过 macOS 的原生右滑通知中心入口显示 Widget。
 
-### 数据来源（重要）
+## 构建
 
-**macOS 15.4 起，第三方 App 已无法通过 `MRMediaRemoteGetNowPlayingInfo` 读取「正在播放」**
-（本项目在 macOS 26.2 上实测：即使使用真实开发者证书签名，该 API 对任何播放器都返回空）。
-因此本项目按下列顺序解析当前播放状态：
-
-| 优先级 | 数据源 | 覆盖 | 说明 |
-|---|---|---|---|
-| 1 | `MediaRemote` | 全系统 | 老系统 / 有权限时可用，读不到就自动降级 |
-| 2 | `ScriptingPlayerSource` | Apple Music、Spotify | AppleScript 读取，含精确播放进度；首次会请求「自动化」权限 |
-| 3 | `NeteaseMusicSource` | 网易云音乐 | 读取其本地 SQLite 播放历史（曲名/歌手/专辑/时长/封面），进度按起播时间推算 |
-
-「正在播放」的播放器永远优先于「已暂停」的播放器，所以暂停的 Music 不会盖住正在播的网易云。
-
----
-
-## 🧱 技术架构
-
-```
-┌──────────────────────────┐                          ┌───────────────────────────┐
-│   MediaWidget.app        │   共享状态（无需 App Group）│  MediaWidgetExtension     │
-│   (菜单栏 / 悬浮面板)     │  ①App Group（若有签名）    │  (WidgetKit 桌面小组件)    │
-├──────────────────────────┤ ───────────────────────▶ ├───────────────────────────┤
-│ MediaMonitor.shared      │  ②小组件沙盒容器内的        │ TimelineProvider 读取      │
-│   ├─ MediaRemoteBridge   │   SharedState.plist       │ MediaIntents              │
-│   └─ MediaController     │ ◀──── 播放指令 ────────────│   └─ MediaRemoteBridge    │
-└──────────────────────────┘                          └───────────────────────────┘
-```
-
-### 目录结构
-
-```
-MediaWidget/
-├── project.yml                        # XcodeGen 工程定义（唯一工程配置来源）
-├── docs/                              # README 截图
-├── Shared/                            # 双 target 共享代码
-│   ├── MediaInfo.swift                # 核心数据模型（Codable / Sendable）
-│   ├── Constants.swift                # App Group、WidgetKind、MediaRemote 指令码
-│   ├── SharedDefaults.swift           # 跨进程存储（App Group → 沙盒容器 → 本地文件）
-│   └── DemoMedia.swift                # 示例数据 + 程序化生成的演示封面
-├── MediaWidget/                       # 主 App target
-│   ├── App/
-│   │   ├── MediaWidgetApp.swift       # @main，MenuBarExtra + Settings
-│   │   └── AppDelegate.swift          # Carbon 全局热键、NSPanel 悬浮窗
-│   ├── MediaMonitor/
-│   │   ├── MediaMonitor.swift         # 状态中枢（@MainActor 单例 ObservableObject）
-│   │   └── MediaRemoteBridge.swift    # 运行期加载私有框架
-│   ├── MediaController/               # 播放控制 + AppleScript 兜底
-│   ├── Views/                         # MenuBarView / FloatingPanelView
-│   ├── Settings/                      # SettingsView + 运行状态诊断
-│   └── MediaWidget.entitlements       # 非沙盒
-└── MediaWidgetExtension/              # 小组件 target
-    ├── Info.plist                     # ⚠️ 必须手写：WidgetKit 需要 NSExtension 字典
-    ├── MediaWidgetBundle.swift
-    ├── MediaWidget.swift              # StaticConfiguration + TimelineProvider
-    ├── MediaIntents.swift             # 播放/暂停、上/下一曲、打开来源 App
-    ├── Views/MediaWidgetView.swift    # small / medium / large 三套布局
-    └── MediaWidgetExtension.entitlements  # 必须沙盒
-```
-
-### 关键技术点
-
-1. **私有框架 MediaRemote**
-   不链接任何私有 header，运行时通过 `CFBundleCreate` + `CFBundleGetFunctionPointerForName` 取符号。编译期零依赖，代价是不能上架 App Store。
-
-2. **跨进程数据共享（无需 App Group）**
-   Widget 扩展**必须沙盒化**（否则 PlugInKit 直接拒绝注册：*plug-ins must be sandboxed*），沙盒进程只能读自己的容器。因此 `SharedDefaults` 按顺序尝试：
-   1. App Group `UserDefaults`（有开发者团队签名时）
-   2. 小组件沙盒容器 `~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application Support/MediaWidget/SharedState.plist`
-      —— 主 App 未沙盒化，可直接写入该路径；小组件读自己的容器，天然可读
-   3. 普通 `~/Library/Application Support/MediaWidget/`
-
-3. **WidgetKit 扩展的 Info.plist 必须手写**
-   `NSExtension → NSExtensionPointIdentifier = com.apple.widgetkit-extension` 无法用 `INFOPLIST_KEY_*` 表达，所以该 target 关闭 `GENERATE_INFOPLIST_FILE`。
-
-4. **网易云音乐检测**
-   NeteaseMusic 3.x 既不向 MediaRemote 暴露信息，其 Chromium 界面也没有可访问的 AX 树。但它把播放历史写在
-   `~/Library/Containers/com.netease.163music/Data/Documents/storage/sqlite_storage.sqlite3` 的
-   `historyTracks` 表里（`playtime` + 完整曲目 JSON），本项目直读该表并在本地缓存封面。
-
-5. **时间戳校正**
-   播放进度用 `positionTimestamp` + `playbackRate` 外推，避免每秒轮询；仅在播放中启用 5 秒刷新定时器。
-
-6. **Swift 6 严格并发**
-   `MediaMonitor` 为 `@MainActor` 单例；`MediaRemoteBridge` 为 `@unchecked Sendable`（初始化后函数指针不可变）；Carbon 回调内用 `MainActor.assumeIsolated`。
-
----
-
-## 🚀 环境要求
-
-- macOS 14.0+（Sonoma）
-- Xcode 16.2+（本项目在 Xcode 26.2 / SDK 26.2 / Swift 6.2 上验证通过）
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-
-```bash
-brew install xcodegen
-```
-
----
-
-## 🛠 快速开始
-
-```bash
-git clone https://github.com/Berlin070777/MediaWidget.git
-cd MediaWidget
-
-xcodegen generate     # .xcodeproj 不入库，必须先生成
-open MediaWidget.xcodeproj
-```
-
-选择 `MediaWidget` scheme → Run。App 只在菜单栏出现（`LSUIElement`）。
-
-命令行构建 / 安装：
+需要 Xcode 26.2、Swift 6.2 和 XcodeGen。部署目标是 macOS 14，实际测试环境见 [可行性与验收](docs/verification.md)。
 
 ```bash
 xcodegen generate
-xcodebuild -project MediaWidget.xcodeproj -scheme MediaWidget -configuration Release build
-cp -R ~/Library/Developer/Xcode/DerivedData/MediaWidget-*/Build/Products/Release/MediaWidget.app /Applications/
+open MediaWidget.xcodeproj
 ```
 
-> 💡 **改了 `project.yml` 或增删了源文件，都要重新执行 `xcodegen generate`**。
-> 仓库刻意忽略 `*.xcodeproj/`，避免工程文件与 `project.yml` 不一致导致的 `Multiple commands produce ...swiftmodule` 报错。
-
-### 使用
-
-| 操作 | 说明 |
-|---|---|
-| 点击菜单栏图标 | 打开控制面板 |
-| `⌘ ⇧ M` | 显示 / 隐藏悬浮面板（全局生效） |
-| 悬浮面板左上角红绿灯 | 原生 macOS 关闭 / 最小化 / 缩放（关闭只是隐藏，`⌘⇧M` 可再唤出） |
-| 面板右上角 ⚙️ | 打开设置 |
-| 设置 → 演示模式 | 无播放器时预览完整 UI（示例曲目） |
-
-### 添加桌面小组件
-
-1. 把 App 放到 `/Applications` 并至少运行一次（让系统注册扩展）
-2. 右键桌面 → **编辑小组件…**
-3. 左侧列表找 **MediaWidget**（按字母序排在中文 App 之后）→ 把小组件拖到桌面
-4. 拖上去之后如果显示「未在播放」，等 5 秒或切换一首歌即可刷新
-
-> 小组件的沙盒容器与主 App 是两个文件系统，共享文件固定落在
-> `~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application Support/MediaWidget/SharedState.plist`。
-> 排查时可查看实时日志：
-> ```bash
-> log stream --predicate 'subsystem == "com.mediawidget.app"' --info
-> ```
-
-### 无开发者账号也能跑
-
-默认配置为 **ad-hoc 签名**（`CODE_SIGN_IDENTITY: "-"`, `DEVELOPMENT_TEAM: ""`），无需任何账号即可编译运行，App Group entitlement 已注释掉，数据共享自动走沙盒容器方案。
-
-发布 / 正式签名时：
-
-1. `project.yml` 中填入 `DEVELOPMENT_TEAM`
-2. 打开两份 `.entitlements` 里注释的 `com.apple.security.application-groups`
-3. `xcodegen generate` 后自动签名
-
----
-
-## 🧪 开发调试
+`./build-local.sh` 构建本地 ad-hoc Release。要生成带 App Group 的 App、Widget 和 Safari 扩展，先在钥匙串中准备 Apple Development 证书，然后运行：
 
 ```bash
-# 演示模式（无需播放器即可看到完整 UI）
-defaults write com.mediawidget.app demoMode -bool YES
-
-# 启动即显示悬浮面板
-defaults write com.mediawidget.app showPanelOnLaunch -bool YES
-
-# 查看共享状态文件
-plutil -p ~/Library/Containers/com.mediawidget.app.widget/Data/Library/Application\ Support/MediaWidget/SharedState.plist
+MEDIA_WIDGET_TEAM=你的团队ID ./build-local.sh
 ```
 
----
+该脚本使用 macOS 的 `TEAMID.com.mediawidget.shared` 组，并对三个目标使用同一个开发团队。输出位于 `build/Build/Products/Release/MediaWidget.app`。ad-hoc 构建使用 Widget 沙盒容器作为开发回退，macOS 的容器保护可能阻止共享，Safari 桥接需要带 App Group 的签名版。[Apple App Group 文档](https://developer.apple.com/documentation/xcode/accessing-app-group-containers)
 
-## 🚧 已知限制
+## 实现与限制
 
-| 限制 | 说明 |
-|---|---|
-| 不能上架 App Store | 使用私有框架 `MediaRemote`，不受 Apple 支持，系统更新可能导致失效 |
-| 首次读取 Music/Spotify 会弹「自动化」权限 | 允许后即可精确读取播放进度；拒绝则只能检测网易云 |
-| 小组件需手动添加 | WidgetKit 不允许程序化把小组件放到桌面，首次需按上文手动拖入 |
-| ad-hoc 签名无 App Group | 走沙盒容器文件共享；换成正式签名后自动切换到 App Group |
-| 多音源切换未做 UI | `allSources` 已采集，UI 待实现 |
-| 系统升级风险 | `MediaRemote` 符号名可能变动；`MediaRemoteBridge` 已做 `nil` 保护，失效时只降级不崩溃 |
+| 功能 | 行为 |
+| --- | --- |
+| 通知中心 Widget | 小、中、大三尺寸。中、大尺寸显示已知进度。App Intents 按钮包含来源和媒体标识，常驻 App 读取后校验并路由。WidgetKit 控制刷新频率，1 倍速且有明确时长时可使用系统计时进度条。 |
+| 悬浮面板 | 可按来源选择、打开来源应用、调节系统音量。媒体支持时可拖动进度及调节独立音量。 |
+| 网易云客户端 | 从自身「控制」菜单读取播放状态并调用相应动作。歌名、歌手、专辑和时长来自观察到的近期本地记录，记录缺失、延迟或无法关联时显示不可用。没有可依赖的实时进度和绝对媒体音量接口。 |
+| B 站客户端 | 辅助功能适配当前客户端的一处视频窗口，识别播放器和时间标签。网页 DOM 类名随客户端更新可能变化。进度拖动和绝对媒体音量目前未实现。 |
+| B 站网页 | Chrome 和 Safari 扩展读取视频元素及页面公开的媒体元数据。支持逐标签页控制播放、暂停、进度和音量。当前未接入分 P 或播放列表的上／下一项按钮。 |
+| 其他媒体 | Apple Music / Spotify 走显式启用的 AppleScript 适配器。QQ 音乐、IINA、VLC、YouTube 暂未接入。 |
+| 本地处理 | 只共享当前快照和短时指令。扩展仅注入 B 站点播或番剧视频页，权限声明没有历史记录 API、全站访问或录屏。 |
+| 平台边界 | 普通第三方 App 没有公开接口可枚举所有系统媒体会话。MediaWidget 通过各来源适配器聚合，运行时不调用 MediaRemote。 |
 
----
+小组件被 macOS 保留在屏幕上的旧快照可能持续到下一次系统刷新。后台退出后旧指令会过期，后台重新启动时不会执行。此构建是本机开发签名，未进行 Developer ID 签名、公证或商店分发。
 
-## 🗺 Roadmap
-
-- [x] 修复 Swift 6 并发报错，跑通构建
-- [x] 修复小组件不注册（缺 `NSExtension` / 非沙盒）
-- [x] 无 App Group 时的跨进程数据共享
-- [x] `.systemSmall` 紧凑小组件
-- [x] 开机自启改用 `SMAppService`
-- [x] MediaRemote 失效后的多数据源兜底（AppleScript + 网易云本地记录）
-- [x] 悬浮面板原生红绿灯
-- [x] 小组件读取不到数据（沙盒路径解析错误）
-- [x] 小组件重载过于频繁（改为按内容变化 + 20 秒节流）
-- [ ] 多音源切换 UI
-- [ ] 主题与封面显示开关落库
-- [ ] 歌词 / 音频可视化
-
----
-
-## ⚠️ 免责声明
-
-本项目使用 **Apple 私有框架 `MediaRemote`** 与 `NSAppleScript` 控制播放，仅用于个人学习与研究，请自行承担使用风险。
-媒体元数据与封面版权归各自内容提供方所有。
-
----
-
-## 📄 License
-
-尚未指定。在补充 LICENSE 前，默认保留所有权利（All rights reserved）。
+更多环境、验证结果和未测项目见 [可行性与验收](docs/verification.md)。
