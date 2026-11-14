@@ -7,7 +7,7 @@ struct SettingsView: View {
 
     @AppStorage("showInDock") private var showInDock = false
     @AppStorage("showArtwork") private var showArtwork = true
-    @AppStorage("downloadArtwork") private var downloadArtwork = false
+    @AppStorage("downloadArtwork") private var downloadArtwork = true
     @AppStorage("reducePolling") private var reducePolling = false
     @AppStorage("scriptedPlayers") private var scriptedPlayers = false
 
@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var loginError: String?
     @State private var chromeStatus: String?
     @State private var safariEnabled: Bool?
+    @State private var neteaseAccessError: String?
 
     var body: some View {
         TabView {
@@ -24,8 +25,12 @@ struct SettingsView: View {
         .frame(width: 510, height: 500)
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
-            refreshSafariState()
             monitor.refreshNowPlaying()
+        }
+        .task {
+            safariEnabled = (try? await SFSafariExtensionManager.stateOfSafariExtension(
+                withIdentifier: "com.mediawidget.app.safari"
+            ))?.isEnabled
         }
     }
 
@@ -46,7 +51,7 @@ struct SettingsView: View {
                 Toggle("允许从媒体站点下载封面", isOn: $downloadArtwork)
                     .disabled(!showArtwork)
                     .onChange(of: downloadArtwork) { monitor.refreshNowPlaying() }
-                Text("联网时仅请求封面图片，播放状态保存在本机。")
+                Text("按需从内容站点获取封面。B 站客户端使用视频编号查图，播放状态保存在本机。")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("降低客户端检测频率", isOn: $reducePolling)
                     .onChange(of: reducePolling) { monitor.refreshNowPlaying() }
@@ -71,6 +76,17 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("网易云曲目与封面") {
+                LabeledContent("曲目数据库", value: monitor.neteaseDatabaseReadable == true ? "可读取" :
+                                monitor.neteaseDatabaseReadable == false ? "无法读取" : "等待网易云")
+                Button("选择网易云存储文件夹…", action: chooseNeteaseFolder)
+                Text(neteaseAccessError ?? "选择网易云的 storage 文件夹。若选择器未定位，按 ⌘⇧G 输入下方路径。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if monitor.neteaseDatabaseReadable != true {
+                    Text("~/Library/Containers/com.netease.163music/Data/Documents/storage")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
             Section("浏览器中的 B 站") {
                 Button("配置 Chrome 扩展") {
                     do {
@@ -82,7 +98,11 @@ struct SettingsView: View {
                 if let chromeStatus { Text(chromeStatus).font(.caption) }
 
                 Button("打开 Safari 扩展设置") {
-                    SFSafariApplication.showPreferencesForExtension(withIdentifier: "com.mediawidget.app.safari") { _ in }
+                    Task {
+                        try? await SFSafariApplication.showPreferencesForExtension(
+                            withIdentifier: "com.mediawidget.app.safari"
+                        )
+                    }
                 }
                 LabeledContent("Safari 扩展", value: safariEnabled == true ? "已启用" : "待启用")
                 Text("在 Safari 扩展设置启用 MediaWidget · B站，并允许访问 www.bilibili.com。Safari 使用同一团队签名的 App Group。")
@@ -98,10 +118,23 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private func refreshSafariState() {
-        SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: "com.mediawidget.app.safari") { state, _ in
-            let enabled = state?.isEnabled ?? false
-            Task { @MainActor in safariEnabled = enabled }
+    private func chooseNeteaseFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "选择网易云音乐的 storage 文件夹"
+        panel.message = "MediaWidget 读取这个文件夹中的曲目数据库，以显示歌名和专辑封面。"
+        panel.prompt = "授权此文件夹"
+        panel.directoryURL = NeteaseMusicSource.storageDirectory.deletingLastPathComponent()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        if panel.runModal() == .OK, let directory = panel.url {
+            do {
+                try NeteaseMusicSource.storeFolderAccess(directory)
+                neteaseAccessError = nil
+                monitor.refreshNowPlaying()
+            } catch {
+                neteaseAccessError = "请选择网易云音乐的 storage 文件夹。"
+            }
         }
     }
 

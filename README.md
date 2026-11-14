@@ -1,65 +1,78 @@
 # MediaWidget
 
-macOS 菜单栏应用和通知中心小组件，支持检测及控制网易云音乐、哔哩哔哩客户端，以及 Chrome 和 Safari 的 B 站视频。菜单栏和悬浮面板能切换当前控制来源。缺失的字段显示「不可用」。
+适用于 macOS 的原生媒体控制小组件。把它添加到通知中心或桌面，就能查看正在播放的网易云歌曲、哔哩哔哩视频，或 Safari、Chrome 中的 B 站视频。来源提供封面时，小、中、大三种尺寸都能显示真实的专辑封面或视频缩略图。
 
-## 在本机使用
+![中号 MediaWidget 显示 Safari 正在播放的 B 站视频、封面、进度和控制按钮](docs/widget-cover-preview.png)
 
-1. 在此 Mac 上打开「应用程序」中的 `MediaWidget.app`。自行构建时，运行 `build/Build/Products/Release/MediaWidget.app` 或把它安装到固定位置，只保留一个运行实例。
-2. 在菜单栏打开控制界面，或按 **⌘⇧M** 打开悬浮面板。面板也可由 `open 'mediawidget://panel'` 打开。
-3. 在「系统设置 → 隐私与安全性 → 辅助功能」添加并启用这个构建位置的 MediaWidget，随后打开网易云或哔哩哔哩客户端开始播放。应用保持在菜单栏时，小组件持续接收快照。
-4. 点屏幕右上角日期时间，或用两指从触控板右边缘向左滑打开通知中心。点击底部「编辑小组件」，搜索「媒体控制」或「MediaWidget」，选中号或大号。桌面右键菜单也可添加。
-5. 播放多个来源时，在菜单栏或悬浮面板的「播放源」菜单里选择；「自动选择」优先显示正在播放的来源，同状态下按网易云、B 站客户端、Safari、Chrome、Apple Music、Spotify 排序。点击标题打开来源。
+*中号小组件预览，使用真实 Safari 播放数据和视频封面离屏渲染。*
 
-### Chrome
+## 添加小组件
 
-1. 在 MediaWidget 设置的「播放源与权限」点「配置 Chrome 扩展」。它会写入当前用户的 Native Messaging host 清单，并在访达中定位打包好的 `ChromeExtension` 目录。
-2. 打开 `chrome://extensions`，开启开发者模式，点「加载已解压的扩展程序」，选择上述目录。
-3. 打开或刷新 `www.bilibili.com/video/…` 或 `www.bilibili.com/bangumi/play/…` 页面。移动 App 后，重新配置 Chrome 并重载扩展目录。使用自定义 `--user-data-dir` 时，Chrome 从对应目录下的 `NativeMessagingHosts` 查找清单。
+1. 打开 `MediaWidget.app`，让它留在菜单栏。需要生成 App 时，参见[从源码构建](#从源码构建)。
+2. 根据下方说明启用你使用的播放器，开始播放歌曲或视频。
+3. 点击屏幕右上角日期时间，或用两指从触控板右边缘向左滑，打开通知中心。点击「编辑小组件」，搜索「媒体控制」或「MediaWidget」，选择尺寸。也可以右键单击桌面，选择「编辑小组件」。
+4. 按 **⌘⇧M** 打开悬浮面板，在「播放源」里选择要控制的应用或标签页。「自动选择」优先显示正在播放的来源。中号和大号小组件会显示可用进度，拖动进度及调节音量在悬浮面板中进行。
 
-### Safari
+点击媒体标题可打开对应来源。第三方手势工具可以绑定 **⌘⇧M** 或运行 `open 'mediawidget://panel'` 来打开面板。
 
-1. 使用带 App Group 的签名版。设置中点「打开 Safari 扩展设置」，或进入「Safari → 设置 → 扩展」。
-2. 启用「MediaWidget · B站」。在该扩展的「编辑网站」中把 `bilibili.com` 设为「允许」，或在 B 站页通过工具栏扩展菜单授权此网站。
-3. 刷新 B 站视频页并播放。在独立 Safari 用户场景中，按其权限设置启用扩展。
+## 启用播放源
 
-### 可选权限
+### 网易云音乐和哔哩哔哩客户端
 
-- 网易云和哔哩哔哩客户端使用辅助功能。若 macOS 提示访问其他 App 的数据，该授权只影响读取网易云本地 SQLite 曲目信息，菜单播放控制可以独立使用。
-- Apple Music 和 Spotify 集成默认关闭。打开后，只对正在运行的播放器发出 Apple Events，并由 macOS 请求对应的「自动化」权限。
-- 封面下载默认关闭。打开后，仅在需要时请求媒体站点的图片 CDN，并将缩略图缓存到本机。
-- 「登录时启动」使用 `SMAppService`。需要固定安装位置时，可把签名 App 放入「应用程序」。
-- 可在已经安装的手势工具中把手势映射到 `⌘⇧M` 或 `mediawidget://panel`。MediaWidget 直接通过 macOS 的原生右滑通知中心入口显示 Widget。
+打开 MediaWidget 的「设置 → 播放源与权限」，点「打开辅助功能设置」，为正在使用的 MediaWidget 授权。这使应用能读取和调用播放器自身的控制菜单或按钮。
 
-## 构建
+网易云的歌名和专辑封面来自本地曲目记录。如果设置中显示曲目数据库「无法读取」，点「选择网易云存储文件夹…」。在文件选择器中按 **⌘⇧G**，输入以下路径，选择文件夹后开始播放一首新歌。
 
-需要 Xcode 26.2、Swift 6.2 和 XcodeGen。部署目标是 macOS 14，实际测试环境见 [可行性与验收](docs/verification.md)。
+```text
+~/Library/Containers/com.netease.163music/Data/Documents/storage
+```
+
+### Safari 中的 B 站
+
+使用带 App Group 的签名版。打开「Safari → 设置 → 扩展」，启用「MediaWidget · B站」，允许扩展访问 `www.bilibili.com`，然后刷新视频页。
+
+### Chrome 中的 B 站
+
+1. 将 App 放在固定位置，例如「应用程序」。从 MediaWidget「设置 → 播放源与权限」点击「配置 Chrome 扩展」。App 会注册本机通信程序，并在访达中选中 `ChromeExtension` 文件夹。
+2. 在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选中该文件夹。
+3. 打开或刷新 B 站视频页。移动 App 后，重新点击「配置 Chrome 扩展」，再从新位置加载扩展。
+
+两个扩展均支持 `www.bilibili.com/video/…` 和 `www.bilibili.com/bangumi/play/…`。
+
+## 支持情况
+
+| 来源 | 可用信息 | 控制与验证 |
+| --- | --- | --- |
+| 网易云音乐 | 实测可读取播放状态。歌名、歌手、时长及封面取决于能否读取并关联近期曲目。 | 播放和暂停已实测。上一首、下一首可调用客户端菜单，部分场景未能确认切歌结果。实时进度和独立音量暂不可用。 |
+| 哔哩哔哩客户端 | 实测可读取视频标题、进度、时长，并凭 BV 编号取得封面。 | 已用真实视频在面板验证暂停和恢复。拖动进度、独立音量和切换上一项／下一项暂未接入。 |
+| Safari、Chrome 的 B 站 | 实测可读取标题、作者、封面、播放状态、进度和视频音量。 | 已实测播放、暂停、跳转进度和调节视频音量。切换分 P 或播放列表暂未接入。Safari 后台标签页可能被系统节流。 |
+| Apple Music、Spotify | 提供可选的 AppleScript 适配器，默认关闭。 | 实际播放测试待做。启用时需为对应播放器授予「自动化」权限。 |
+
+- **封面**已用真实 B 站视频验证。中号 Widget 时间线收到了 Safari 和 B 站客户端各自的封面。网易云专辑封面仍待在文件夹授权后复测。
+- **小组件按钮**通过 App Intent 把操作发送给当前显示的媒体。1.2.0 已用同一个 Intent 验证 Safari 视频实际暂停，通知中心里的直接点击仍待复测。Widget 状态和封面的刷新由 macOS 调度。
+- **音量**在面板中分为系统输出音量和来源独立音量。系统音量取决于输出设备是否开放控制，独立音量取决于播放源。
+- **媒体检测**按应用和标签页适配。项目使用 WidgetKit、App Intents、辅助功能、浏览器扩展和 Core Audio，运行时无需调用私有 MediaRemote API。QQ 音乐、IINA、VLC 和 YouTube 暂未接入。
+
+详细实测环境、技术调研及待验证项目见[可行性与验收](docs/verification.md)。
+
+## 从源码构建
+
+需要 Xcode 26.2（Swift 6.2 工具链）和 XcodeGen。工程部署目标为 macOS 14，本机验证环境为 MacBook Air M2，构建与运行记录见[可行性与验收](docs/verification.md)。
 
 ```bash
+brew install xcodegen
 xcodegen generate
 open MediaWidget.xcodeproj
 ```
 
-`./build-local.sh` 构建本地 ad-hoc Release。要生成带 App Group 的 App、Widget 和 Safari 扩展，先在钥匙串中准备 Apple Development 证书，然后运行：
+钥匙串已有 Apple Development 证书时，使用你的开发团队 ID 构建 App、Widget 和 Safari 扩展，让三个目标共享 App Group。
 
 ```bash
-MEDIA_WIDGET_TEAM=你的团队ID ./build-local.sh
+MEDIA_WIDGET_TEAM=YOUR_TEAM_ID ./build-local.sh
 ```
 
-该脚本使用 macOS 的 `TEAMID.com.mediawidget.shared` 组，并对三个目标使用同一个开发团队。输出位于 `build/Build/Products/Release/MediaWidget.app`。ad-hoc 构建使用 Widget 沙盒容器作为开发回退，macOS 的容器保护可能阻止共享，Safari 桥接需要带 App Group 的签名版。[Apple App Group 文档](https://developer.apple.com/documentation/xcode/accessing-app-group-containers)
+产物位于 `build/Build/Products/Release/MediaWidget.app`。直接运行 `./build-local.sh` 可生成 ad-hoc 本地开发版。该版本的 Widget 共享可能受 macOS 容器保护限制，Safari 桥接需要带 App Group 的签名版。
 
-## 实现与限制
+## 隐私
 
-| 功能 | 行为 |
-| --- | --- |
-| 通知中心 Widget | 小、中、大三尺寸。中、大尺寸显示已知进度。App Intents 按钮包含来源和媒体标识，常驻 App 读取后校验并路由。WidgetKit 控制刷新频率，1 倍速且有明确时长时可使用系统计时进度条。 |
-| 悬浮面板 | 可按来源选择、打开来源应用、调节系统音量。媒体支持时可拖动进度及调节独立音量。 |
-| 网易云客户端 | 从自身「控制」菜单读取播放状态并调用相应动作。歌名、歌手、专辑和时长来自观察到的近期本地记录，记录缺失、延迟或无法关联时显示不可用。没有可依赖的实时进度和绝对媒体音量接口。 |
-| B 站客户端 | 辅助功能适配当前客户端的一处视频窗口，识别播放器和时间标签。网页 DOM 类名随客户端更新可能变化。进度拖动和绝对媒体音量目前未实现。 |
-| B 站网页 | Chrome 和 Safari 扩展读取视频元素及页面公开的媒体元数据。支持逐标签页控制播放、暂停、进度和音量。当前未接入分 P 或播放列表的上／下一项按钮。 |
-| 其他媒体 | Apple Music / Spotify 走显式启用的 AppleScript 适配器。QQ 音乐、IINA、VLC、YouTube 暂未接入。 |
-| 本地处理 | 只共享当前快照和短时指令。扩展仅注入 B 站点播或番剧视频页，权限声明没有历史记录 API、全站访问或录屏。 |
-| 平台边界 | 普通第三方 App 没有公开接口可枚举所有系统媒体会话。MediaWidget 通过各来源适配器聚合，运行时不调用 MediaRemote。 |
-
-小组件被 macOS 保留在屏幕上的旧快照可能持续到下一次系统刷新。后台退出后旧指令会过期，后台重新启动时不会执行。此构建是本机开发签名，未进行 Developer ID 签名、公证或商店分发。
-
-更多环境、验证结果和未测项目见 [可行性与验收](docs/verification.md)。
+播放状态、封面缓存和控制指令保存在本机。两个浏览器扩展只在上述 B 站视频页运行，无需浏览历史或屏幕录制权限。下载封面时，应用按需访问媒体站点，B 站客户端需要用当前视频的 BV 编号查询封面地址。可在「设置 → 通用 → 封面与刷新」关闭封面下载或整个封面显示。

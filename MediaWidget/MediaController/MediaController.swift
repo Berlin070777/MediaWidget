@@ -8,14 +8,14 @@ actor MediaController {
         let sources: [MediaInfo]
         let artworkURLs: [String: URL]
         let accessibility: Bool
+        let neteaseDatabaseReadable: Bool?
         let systemAudio: SystemAudio.Snapshot
     }
 
     func read(processes: [String: pid_t], readArtwork: Bool) -> Reading {
-        let desktop = [
-            netease.snapshot(pid: processes[Constants.KnownApp.neteaseMusic]),
-            bilibili.snapshot(pid: processes[Constants.KnownApp.bilibili])
-        ].compactMap { $0 }.map { ($0, $0.bundleID == Constants.KnownApp.neteaseMusic ? netease.artworkURL : nil) }
+        let music = netease.snapshot(pid: processes[Constants.KnownApp.neteaseMusic])
+        let video = bilibili.snapshot(pid: processes[Constants.KnownApp.bilibili])
+        let desktop = [music.map { ($0, netease.artworkURL) }, video.map { ($0, bilibili.artworkURL) }].compactMap { $0 }
         let web = [BrowserKind.chrome, .safari].flatMap { browser in
             processes[browser.bundleID] == nil ? [] : BrowserBridge.snapshots(browser)
         }
@@ -31,7 +31,8 @@ actor MediaController {
             return media
         }
         return Reading(sources: sources, artworkURLs: artworkURLs,
-                       accessibility: AccessibilityMedia.isTrusted, systemAudio: SystemAudio.snapshot())
+                       accessibility: AccessibilityMedia.isTrusted, neteaseDatabaseReadable: netease.databaseReadable,
+                       systemAudio: SystemAudio.snapshot())
     }
 
     func perform(_ action: MediaCommand, media: MediaInfo, pid: pid_t?, value: Double?) -> Bool {

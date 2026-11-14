@@ -7,6 +7,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The floating panel, created lazily on first use.
     private var floatingPanel: NSPanel?
+    private var preferencesWindow: NSWindow?
 
     /// Carbon hot key registration handle.
     private var hotKeyRef: EventHotKeyRef?
@@ -45,8 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if urls.contains(where: { $0.scheme == "mediawidget" && $0.host == "panel" }) {
-            presentFloatingPanel()
+        for url in urls where url.scheme == "mediawidget" {
+            switch url.host {
+            case "panel": presentFloatingPanel()
+            case "settings": presentSettings()
+            default: break
+            }
         }
     }
 
@@ -157,6 +162,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         floatingPanel?.orderOut(nil)
     }
 
+    func presentSettings() {
+        let window = preferencesWindow ?? NSWindow(
+            contentViewController: NSHostingController(rootView: SettingsView(monitor: MediaMonitor.shared))
+        )
+        if preferencesWindow == nil {
+            window.title = "MediaWidget 设置"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            preferencesWindow = window
+        }
+        hideFloatingPanel()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: - NSWindowDelegate
 
     /// The red traffic light hides the panel instead of tearing it down, so the
@@ -192,7 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
 
-        let hostingView = NSHostingView(rootView: FloatingPanelView())
+        let hostingView = NSHostingView(rootView: FloatingPanelView(showSettings: { [weak self] in self?.presentSettings() }))
         hostingView.translatesAutoresizingMaskIntoConstraints = false
 
         // Wrap in a container so the rounded corners are clipped reliably.

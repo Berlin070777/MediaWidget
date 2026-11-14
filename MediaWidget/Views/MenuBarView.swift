@@ -3,7 +3,7 @@ import SwiftUI
 struct MenuBarView: View {
     @ObservedObject var monitor: MediaMonitor
     let showPanel: () -> Void
-    @Environment(\.openSettings) private var openSettings
+    let showSettings: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -14,7 +14,7 @@ struct MenuBarView: View {
                     showPanel()
                 }
                 Spacer()
-                Button("设置", systemImage: "gearshape") { openSettings() }
+                Button("设置", systemImage: "gearshape") { showSettings() }
                 Button("退出", systemImage: "power") { NSApp.terminate(nil) }
             }
             .buttonStyle(.borderless)

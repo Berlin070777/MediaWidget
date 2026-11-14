@@ -11,15 +11,18 @@ final class BilibiliSource {
         let toggle: AXUIElement
         let timeLabel: AXUIElement?
         let author: AXUIElement?
+        let webArea: AXUIElement?
     }
 
     private var player: Player?
+    private(set) var artworkURL: URL?
     private var process: pid_t?
     private var nextDiscovery = Date.distantPast
     private var previousTiming: (title: String?, position: Double, sampledAt: Date)?
     private var playbackObservation = PlaybackState.unknown
 
     func snapshot(pid: pid_t?) -> MediaInfo? {
+        artworkURL = nil
         guard let pid, AX.isTrusted else {
             player = nil
             process = nil
@@ -46,6 +49,8 @@ final class BilibiliSource {
         guard let player else { return nil }
         let classes = AX.classes(player.container)
         let title = AX.title(player.window).nonBlank
+        let videoID = player.webArea.flatMap(videoID(for:))
+        artworkURL = videoID.flatMap(ArtworkCache.bilibiliReference(videoID:))
         let values = player.timeLabel.map(AX.children)?.compactMap { element -> TimeInterval? in
             let text: String? = AX.value(element, "AXValue")
             return AX.seconds(text)
@@ -70,7 +75,7 @@ final class BilibiliSource {
         let observed = classState == .unknown && position != nil ? playbackObservation : classState
         let capabilities: MediaCapabilities = AX.enabled(player.toggle) && observed != .unknown ? [.canPlay, .canPause] : []
         return MediaInfo(sourceID: bundleID, bundleID: bundleID, sourceName: "哔哩哔哩",
-                         itemID: title, title: title ?? "视频标题不可用",
+                         itemID: videoID ?? title, title: title ?? "视频标题不可用",
                          artist: player.author.flatMap { AX.title($0).nonBlank ?? AX.value($0, "AXValue") },
                          duration: duration,
                          currentPosition: position, playbackState: observed,
@@ -78,7 +83,8 @@ final class BilibiliSource {
     }
 
     func perform(_ command: MediaCommand, itemID: String?) -> Bool {
-        guard let player, AX.title(player.window).nonBlank == itemID else { return false }
+        guard let player,
+              (player.webArea.flatMap(videoID(for:)) ?? AX.title(player.window).nonBlank) == itemID else { return false }
         if command == .activate {
             return AXUIElementPerformAction(player.window, kAXRaiseAction as CFString) == .success
         }
@@ -104,6 +110,12 @@ final class BilibiliSource {
         return .unknown
     }
 
+    private func videoID(for webArea: AXUIElement) -> String? {
+        let raw: URL? = AX.value(webArea, "AXURL")
+        guard let raw, raw.host == "bilipc.bilibili.com", raw.path == "/player.html" else { return nil }
+        return URLComponents(url: raw, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "bvid" }?.value
+    }
+
     private func discover(_ pid: pid_t) -> Player? {
         let app = AX.application(pid)
         let windows: [AXUIElement] = AX.value(app, "AXWindows") ?? []
@@ -120,7 +132,9 @@ final class BilibiliSource {
                 let classes = AX.classes($0)
                 return classes.contains("up-name") || classes.contains("upinfo-name")
             }
-            return Player(window: window, container: container, toggle: toggle, timeLabel: label, author: author)
+            let webArea = AX.children(window).first { (AX.value($0, "AXRole") as String?) == "AXWebArea" }
+            return Player(window: window, container: container, toggle: toggle,
+                          timeLabel: label, author: author, webArea: webArea)
         }
         return nil
     }

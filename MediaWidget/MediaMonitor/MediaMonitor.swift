@@ -11,6 +11,7 @@ final class MediaMonitor: ObservableObject {
     @Published private(set) var allSources: [MediaInfo] = []
     @Published private(set) var systemAudio = SystemAudio.Snapshot()
     @Published private(set) var accessibility = false
+    @Published private(set) var neteaseDatabaseReadable: Bool?
     @Published private(set) var sharedStorageError = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var preferredSource = ""
@@ -25,7 +26,7 @@ final class MediaMonitor: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var lastSnapshot: WidgetSnapshot?
     private var artworkTasks: Set<URL> = []
-    private var artworkAttempts: [URL: Date] = [:]
+    private var artworkRetries: [URL: Date] = [:]
     private var scriptedSources: [(MediaInfo, URL?)] = []
     private var scriptPoll = Date.distantPast
     private static let logger = Logger(subsystem: "com.mediawidget.app", category: "Monitor")
@@ -98,6 +99,9 @@ final class MediaMonitor: ObservableObject {
                 return
             }
             if accessibility != reading.accessibility { accessibility = reading.accessibility }
+            if neteaseDatabaseReadable != reading.neteaseDatabaseReadable {
+                neteaseDatabaseReadable = reading.neteaseDatabaseReadable
+            }
             if reading.systemAudio != systemAudio { systemAudio = reading.systemAudio }
             var sources = reading.sources
             var urls = reading.artworkURLs
@@ -121,7 +125,7 @@ final class MediaMonitor: ObservableObject {
             let ordered = sources.sorted(by: sourceOrder)
             if allSources != ordered { allSources = ordered }
             updateSelection()
-            if readArtwork, UserDefaults.standard.bool(forKey: "downloadArtwork"),
+            if readArtwork, showArtwork, UserDefaults.standard.object(forKey: "downloadArtwork") as? Bool ?? true,
                let url = urls[currentMedia.sourceID], currentMedia.artworkData == nil {
                 requestArtwork(url)
             }
@@ -197,9 +201,10 @@ final class MediaMonitor: ObservableObject {
                let id = UUID(uuidString: String(document)) {
                 SFSafariApplication.dispatchMessage(withName: "mediawidget-refresh",
                     toExtensionWithIdentifier: "com.mediawidget.app.safari",
-                    userInfo: ["documentID": id.uuidString.lowercased()]) { error in
+                    userInfo: ["documentID": id.uuidString.lowercased()]) { @Sendable error in
                         if let error {
-                            Self.logger.debug("Safari wake-up: \(error.localizedDescription, privacy: .private)")
+                            Logger(subsystem: "com.mediawidget.app", category: "Monitor")
+                                .debug("Safari wake-up: \(error.localizedDescription, privacy: .private)")
                         }
                     }
             }
@@ -231,6 +236,7 @@ final class MediaMonitor: ObservableObject {
     private func updateSelection() {
         let selected = allSources.first { $0.sourceID == preferredSource }
             ?? allSources.first(where: \.isPlaying)
+            ?? allSources.first(where: { $0.sourceID == currentMedia.sourceID && $0.canPlayPause })
             ?? allSources.first(where: { !$0.capabilities.isEmpty })
             ?? allSources.first
             ?? .empty
@@ -286,13 +292,16 @@ final class MediaMonitor: ObservableObject {
 
     private func requestArtwork(_ url: URL) {
         let now = Date.now
-        artworkAttempts = artworkAttempts.filter { now.timeIntervalSince($0.value) < 300 }
-        guard artworkAttempts[url] == nil, artworkTasks.insert(url).inserted else { return }
-        artworkAttempts[url] = now
+        artworkRetries = artworkRetries.filter { $0.value > now }
+        guard artworkRetries[url] == nil, artworkTasks.insert(url).inserted else { return }
         Task {
             let downloaded = await ArtworkCache.download(url)
             artworkTasks.remove(url)
-            if downloaded { refreshNowPlaying() }
+            if downloaded {
+                refreshNowPlaying()
+            } else {
+                artworkRetries[url] = .now.addingTimeInterval(30)
+            }
         }
     }
 }

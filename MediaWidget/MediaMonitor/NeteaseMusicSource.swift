@@ -2,9 +2,31 @@ import AppKit
 import SQLite3
 
 final class NeteaseMusicSource {
+    static let storageDirectory = FileManager.default.homeDirectoryForCurrentUser.appending(path:
+        "Library/Containers/\(Constants.KnownApp.neteaseMusic)/Data/Documents/storage", directoryHint: .isDirectory)
+    static let folderBookmarkKey = "neteaseStorageBookmark"
+
+    static func storeFolderAccess(_ directory: URL) throws {
+        guard directory.standardizedFileURL.path == storageDirectory.standardizedFileURL.path else {
+            throw CocoaError(.fileReadInvalidFileName)
+        }
+        // AppKit has already granted access to the selected folder. A bookmark
+        // lets the app restore that narrow grant after it exits.
+        let bookmark: Data
+        do {
+            bookmark = try directory.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess])
+        } catch {
+            bookmark = try directory.bookmarkData()
+        }
+        UserDefaults.standard.set(bookmark, forKey: folderBookmarkKey)
+    }
+
     private let bundleID = Constants.KnownApp.neteaseMusic
     private var process: pid_t?
     private var lastReadAttempt = Date.distantPast
+    private var bookmark: Data?
+    private var selectedFolder: URL?
+    private(set) var databaseReadable: Bool?
     private var databaseModification: Date?
     private var cachedTrack: Track?
     private var confirmedTrack: Track?
@@ -23,6 +45,7 @@ final class NeteaseMusicSource {
     func snapshot(pid: pid_t?) -> MediaInfo? {
         guard let pid, AccessibilityMedia.isTrusted else {
             process = nil
+            databaseReadable = nil
             confirmedTrack = nil
             return nil
         }
@@ -101,19 +124,45 @@ final class NeteaseMusicSource {
     }
 
     private func refreshTrack() {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appending(path:
-            "Library/Containers/\(bundleID)/Data/Documents/storage/sqlite_storage.sqlite3")
+        let storedBookmark = UserDefaults.standard.data(forKey: Self.folderBookmarkKey)
+        if storedBookmark != bookmark {
+            bookmark = storedBookmark
+            selectedFolder = nil
+            databaseReadable = nil
+            cachedTrack = nil
+            confirmedTrack = nil
+            databaseModification = nil
+            lastReadAttempt = .distantPast
+            if let storedBookmark {
+                var stale = false
+                selectedFolder = (try? URL(resolvingBookmarkData: storedBookmark, options: .withSecurityScope,
+                                           relativeTo: nil, bookmarkDataIsStale: &stale))
+                    ?? (try? URL(resolvingBookmarkData: storedBookmark, options: .withoutUI,
+                                 relativeTo: nil, bookmarkDataIsStale: &stale))
+            }
+        }
+        let directory = selectedFolder ?? Self.storageDirectory
+        let accessing = selectedFolder?.startAccessingSecurityScopedResource() == true
+        defer { if accessing { selectedFolder?.stopAccessingSecurityScopedResource() } }
+        let url = directory.appending(path: "sqlite_storage.sqlite3")
         let wal = URL(fileURLWithPath: url.path + "-wal")
         let modified = [url, wal].compactMap {
             try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         }.max()
-        guard let modified, modified != databaseModification,
+        guard modified != nil || databaseReadable != false else { return }
+        guard databaseModification == nil || modified != databaseModification,
               Date.now.timeIntervalSince(lastReadAttempt) >= 2 else { return }
         lastReadAttempt = .now
 
         var database: OpaquePointer?
         defer { sqlite3_close(database) }
-        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return }
+        let opened = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK
+        databaseReadable = opened
+        guard opened else {
+            cachedTrack = nil
+            confirmedTrack = nil
+            return
+        }
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         let query = "SELECT id, playtime, jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1"

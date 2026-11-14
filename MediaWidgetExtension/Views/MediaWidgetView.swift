@@ -22,21 +22,27 @@ struct MediaWidgetView: View {
                 .widgetURL(URL(string: "mediawidget://panel"))
             } else {
                 VStack(alignment: .leading, spacing: large ? 14 : 5) {
-                    if compact {
-                        metadata
-                    } else {
-                        HStack(spacing: large ? 13 : 9) {
-                            if entry.showArtwork { artwork(size: large ? 96 : 43) }
-                            metadata
+                    HStack(spacing: large ? 14 : 8) {
+                        if !compact && entry.showArtwork {
+                            artwork(width: large ? 124 : 65, height: large ? 100 : 49)
                         }
+                        metadata
+                    }
+                    if compact && entry.showArtwork {
+                        artwork(width: 54, height: 46)
+                            .frame(maxWidth: .infinity)
                     }
                     if !compact { progress }
-                    HStack(spacing: compact ? 12 : 26) {
+                    HStack(spacing: compact ? 3 : 16) {
                         Spacer(minLength: 0)
-                        control(.previous, title: "上一项", icon: "backward.fill", size: 13)
+                        if !compact || media.capabilities.contains(.canPreviousTrack) {
+                            control(.previous, title: "上一项", icon: "backward.fill", size: 13)
+                        }
                         control(media.isPlaying ? .pause : .play, title: media.isPlaying ? "暂停" : "播放",
                                 icon: media.isPlaying ? "pause.fill" : "play.fill", size: large ? 24 : 17)
-                        control(.next, title: "下一项", icon: "forward.fill", size: 13)
+                        if !compact || media.capabilities.contains(.canNextTrack) {
+                            control(.next, title: "下一项", icon: "forward.fill", size: 13)
+                        }
                         Spacer(minLength: 0)
                     }
                     if large {
@@ -52,7 +58,9 @@ struct MediaWidgetView: View {
         Button(intent: WidgetPlaybackIntent(.activate, media: media)) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(media.title).font(large ? .headline : .subheadline.bold()).lineLimit(large ? 2 : 1)
-                Text(media.artist ?? "作者不可用").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if !compact {
+                    Text(media.artist ?? "作者不可用").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Text(compact ? media.sourceName : "\(media.sourceName) · \(media.stateLabel)")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -66,12 +74,15 @@ struct MediaWidgetView: View {
         let position = media.position(at: entry.date)
         return VStack(spacing: 2) {
             if let duration = media.duration, duration > 0, let position {
-                if media.isPlaying && media.playbackRate == 1 && position < duration {
-                    let start = entry.date.addingTimeInterval(-position)
-                    ProgressView(timerInterval: start...start.addingTimeInterval(duration), countsDown: false, label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                } else {
-                    ProgressView(value: position, total: duration)
+                GeometryReader { geometry in
+                    Capsule().fill(.quaternary)
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(.tint)
+                                .frame(width: geometry.size.width * min(max(position / duration, 0), 1))
+                        }
                 }
+                .frame(height: 4)
+                .accessibilityLabel("播放进度")
             }
             HStack {
                 Text(MediaInfo.formatTime(position))
@@ -96,19 +107,26 @@ struct MediaWidgetView: View {
         .disabled(!(MediaCommand(rawValue: action.rawValue).map { media.capabilities.contains($0.capability) } ?? false))
     }
 
-    private func artwork(size: CGFloat) -> some View {
+    private func artwork(width: CGFloat, height: CGFloat) -> some View {
         Group {
             if let data = media.artworkData, let image = NSImage(data: data) {
-                Image(nsImage: image).resizable().scaledToFill()
+                let artwork = Image(nsImage: image).resizable()
+                if #available(macOS 26, *) {
+                    artwork.widgetAccentedRenderingMode(.fullColor)
+                        .scaledToFill().accessibilityLabel("封面")
+                } else {
+                    artwork.scaledToFill().accessibilityLabel("封面")
+                }
             } else {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Image(systemName: "music.note").font(.system(size: size * 0.4)).foregroundStyle(.secondary)
+                    Image(systemName: "music.note").font(.system(size: height * 0.38)).foregroundStyle(.secondary)
                 }
                 .accessibilityLabel("封面不可用")
             }
         }
-        .frame(width: size, height: size)
-        .clipShape(.rect(cornerRadius: size * 0.14))
+        .frame(width: width, height: height)
+        .clipped()
+        .clipShape(.rect(cornerRadius: 7))
     }
 }

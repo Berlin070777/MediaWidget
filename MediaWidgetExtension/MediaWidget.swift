@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import os
 
 struct MediaWidgetEntry: TimelineEntry {
     let date: Date
@@ -8,6 +9,7 @@ struct MediaWidgetEntry: TimelineEntry {
 }
 
 struct MediaWidgetProvider: TimelineProvider {
+    private static let logger = Logger(subsystem: "com.mediawidget.app", category: "WidgetTimeline")
     func placeholder(in context: Context) -> MediaWidgetEntry {
         MediaWidgetEntry(date: .now, mediaInfo: .empty, showArtwork: true)
     }
@@ -18,7 +20,9 @@ struct MediaWidgetProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<MediaWidgetEntry>) -> Void) {
         let now = Date.now
-        completion(Timeline(entries: [entry(at: now)], policy: .after(now.addingTimeInterval(300))))
+        let entry = entry(at: now)
+        Self.logger.info("Timeline size: \(String(describing: context.family), privacy: .public), artwork bytes: \(entry.mediaInfo.artworkData?.count ?? 0)")
+        completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(300))))
     }
 
     private func entry(at date: Date) -> MediaWidgetEntry {

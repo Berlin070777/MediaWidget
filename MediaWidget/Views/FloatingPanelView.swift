@@ -2,7 +2,7 @@ import SwiftUI
 
 struct FloatingPanelView: View {
     @ObservedObject private var monitor = MediaMonitor.shared
-    @Environment(\.openSettings) private var openSettings
+    let showSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
@@ -10,7 +10,7 @@ struct FloatingPanelView: View {
                 Text("媒体控制")
                     .font(.headline)
                 Spacer()
-                Button("设置", systemImage: "gearshape") { openSettings() }
+                Button("设置", systemImage: "gearshape") { showSettings() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
             }

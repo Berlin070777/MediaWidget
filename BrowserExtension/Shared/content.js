@@ -27,17 +27,25 @@
 
     function read(video) {
         const metadata = navigator.mediaSession?.metadata;
-        const cover = metadata?.artwork?.[0]?.src || meta("og:image");
+        const pageID = location.pathname.match(/\/video\/(BV[0-9A-Za-z]{10})/)?.[1];
+        const canonical = document.querySelector('link[rel="canonical"]')?.href;
+        const canonicalID = canonical?.match(/\/video\/(BV[0-9A-Za-z]{10})/)?.[1];
+        const pageCover = !pageID || !canonicalID || pageID === canonicalID ? meta("og:image") : null;
+        const covers = [pageCover, ...(metadata?.artwork ?? []).map((entry) => entry.src), video.poster];
         let artwork = null;
-        try {
-            const url = new URL(cover);
-            if (/^(https?:)$/.test(url.protocol) && /(^|\.)hdslb\.com$/.test(url.hostname)) {
-                url.protocol = "https:";
-                url.search = "";
-                url.hash = "";
-                artwork = url.href;
-            }
-        } catch {}
+        for (const cover of covers) {
+            if (!cover) continue;
+            try {
+                const url = new URL(cover, location.href);
+                if (/^(https?:)$/.test(url.protocol) && /(^|\.)hdslb\.com$/.test(url.hostname)) {
+                    url.protocol = "https:";
+                    url.search = "";
+                    url.hash = "";
+                    artwork = url.href;
+                    break;
+                }
+            } catch {}
+        }
         return {
             itemID: itemID(),
             title: text(metadata?.title) || text(document.querySelector("h1.video-title, .video-info-title")?.textContent) ||
