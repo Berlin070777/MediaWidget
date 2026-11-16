@@ -12,6 +12,7 @@ struct MediaWidgetEntry: TimelineEntry {
 }
 
 struct MediaWidgetProvider: TimelineProvider {
+    private static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     private static let logger = Logger(subsystem: "com.mediawidget.app", category: "WidgetTimeline")
     func placeholder(in context: Context) -> MediaWidgetEntry {
         MediaWidgetEntry(date: .now, mediaInfo: .empty, showArtwork: true)
@@ -42,7 +43,7 @@ struct MediaWidgetProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<MediaWidgetEntry>) -> Void) {
         let now = Date.now
         let entry = entry(at: now)
-        Self.logger.info("Timeline size: \(String(describing: context.family), privacy: .public), artwork bytes: \(entry.mediaInfo.artworkData?.count ?? 0), sources: \(entry.sources.count)")
+        Self.logger.info("Widget build \(Self.build, privacy: .public), timeline size: \(String(describing: context.family), privacy: .public), artwork bytes: \(entry.mediaInfo.artworkData?.count ?? 0), sources: \(entry.sources.count)")
         completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(300))))
     }
 

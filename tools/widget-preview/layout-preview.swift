@@ -76,14 +76,13 @@ func check(_ condition: Bool, _ label: String) {
 
 @MainActor
 func run() {
-    WidgetGlassPreview.forceMaterialFallback = true
     let cover = coverArt()
     let sampleMedia = MediaInfo(
         sourceID: "preview:netease", bundleID: Constants.KnownApp.neteaseMusic,
         sourceName: "网易云音乐", title: "夜曲", artist: "周杰伦", album: "十一月的萧邦",
         artworkData: cover, duration: 227, currentPosition: 46,
         playbackState: .playing,
-        capabilities: [.canPlay, .canPause, .canNextTrack, .canPreviousTrack]
+        capabilities: [.canPlay, .canPause, .canNextTrack, .canPreviousTrack, .canSeek]
     )
     let sampleSources = [
         WidgetSourceSummary(sourceID: sampleMedia.sourceID, bundleID: sampleMedia.bundleID,

@@ -36,8 +36,9 @@ struct MediaWidgetView: View {
     private var ambientWash: some View {
         Group {
             if let palette {
-                RadialGradient(colors: [palette.top.opacity(0.28), palette.bottom.opacity(0.10), .clear],
-                               center: .topLeading, startRadius: 8, endRadius: 300)
+                RadialGradient(colors: [palette.top.opacity(0.18), palette.bottom.opacity(0.07), .clear],
+                               center: .center, startRadius: 4, endRadius: compact ? 76 : 160)
+                    .mask { RoundedRectangle(cornerRadius: 22).blur(radius: 10) }
             }
         }
         .allowsHitTesting(false)
@@ -47,9 +48,10 @@ struct MediaWidgetView: View {
 
     private var smallLayout: some View {
         VStack(spacing: 5) {
-            HStack {
+            HStack(spacing: 5) {
                 sourceChip
                 Spacer(minLength: 0)
+                if media.capabilities.contains(.canSeek) { seekPanelButton }
             }
             VStack(spacing: 4) {
                 if entry.showArtwork {
@@ -62,6 +64,7 @@ struct MediaWidgetView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            progressIndicator
             controlsRow(diameter: 27, playDiameter: 31, iconSize: 10, playIconSize: 13, spacing: 10)
         }
     }
@@ -71,7 +74,7 @@ struct MediaWidgetView: View {
             if entry.showArtwork {
                 artworkView(corner: 14).frame(width: 102, height: 102)
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 sourceChip
                 mediaLink {
                     VStack(alignment: .leading, spacing: 3) {
@@ -128,7 +131,7 @@ struct MediaWidgetView: View {
                 .font(.system(size: compact ? 20 : 28, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: compact ? 50 : 66, height: compact ? 50 : 66)
-                .widgetGlass(in: Circle())
+                .widgetControlSurface(in: Circle())
             Text("未检测到媒体")
                 .font(.system(size: compact ? 13 : 16, weight: .semibold))
             Text("开始播放，或点按打开面板选择播放源。")
@@ -140,7 +143,7 @@ struct MediaWidgetView: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .widgetGlass(in: Capsule())
+                    .widgetControlSurface(in: Capsule())
             }
             Spacer(minLength: 0)
         }
@@ -190,7 +193,7 @@ struct MediaWidgetView: View {
             .padding(.horizontal, compact ? 7 : 9)
             .padding(.vertical, compact ? 3.5 : 5)
             .contentShape(Capsule())
-            .widgetGlass(in: Capsule(), interactive: canSwitchSource)
+            .widgetControlSurface(in: Capsule())
         }
         .buttonStyle(.plain)
         .invalidatableContent()
@@ -217,28 +220,79 @@ struct MediaWidgetView: View {
             .lineLimit(1)
     }
 
-    private var progress: some View {
-        let position = media.position(at: entry.date)
-        return VStack(spacing: 3) {
-            if let duration = media.duration, duration > 0, let position {
-                GeometryReader { geometry in
-                    Capsule().fill(.quaternary)
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(LinearGradient(colors: [accent, accent.opacity(0.65)],
-                                                     startPoint: .leading, endPoint: .trailing))
-                                .frame(width: geometry.size.width * min(max(position / duration, 0), 1))
-                        }
+    private var progressInterval: ClosedRange<Date>? {
+        // ImageRenderer previews use the same layout with a static sample.
+        guard familyOverride == nil, media.isPlaying, let position = media.position(at: entry.date),
+              let duration = media.duration, duration.isFinite, duration > 0,
+              media.playbackRate.isFinite, (0.05...16).contains(media.playbackRate) else { return nil }
+        let start = entry.date.addingTimeInterval(-position / media.playbackRate)
+        return start...start.addingTimeInterval(duration / media.playbackRate)
+    }
+
+    private var seekPanelButton: some View {
+        Button(intent: WidgetPlaybackIntent(.openPanel, media: media)) {
+            Label("调整进度", systemImage: "slider.horizontal.3")
+                .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                .labelStyle(SeekButtonLabelStyle(iconOnly: compact))
+                .fixedSize()
+                .padding(.horizontal, compact ? 5 : 7)
+                .frame(minHeight: 22)
+                .contentShape(Capsule())
+                .widgetControlSurface(in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("打开面板调整进度")
+        .accessibilityHint("在悬浮面板拖动进度")
+    }
+
+    @ViewBuilder
+    private var progressIndicator: some View {
+        if let position = media.position(at: entry.date), let duration = media.duration,
+           duration.isFinite, duration > 0 {
+            Group {
+                if familyOverride != nil {
+                    // Offscreen previews cannot snapshot the native AppKit progress view.
+                    GeometryReader { geometry in
+                        Capsule()
+                            .fill(.quaternary)
+                            .overlay(alignment: .leading) {
+                                Capsule()
+                                    .fill(accent)
+                                    .frame(width: geometry.size.width * min(max(position / duration, 0), 1))
+                            }
+                    }
+                    .frame(height: 4)
+                } else if let interval = progressInterval {
+                    ProgressView(timerInterval: interval, countsDown: false) {
+                        EmptyView()
+                    } currentValueLabel: {
+                        EmptyView()
+                    }
+                } else {
+                    ProgressView(value: position, total: duration)
                 }
-                .frame(height: 4)
-                .accessibilityLabel("播放进度")
             }
-            HStack {
-                Text(MediaInfo.formatTime(position))
-                Spacer()
+            .progressViewStyle(.linear)
+            .tint(accent)
+            .accessibilityLabel("播放进度")
+        }
+    }
+
+    private var progress: some View {
+        VStack(spacing: 3) {
+            progressIndicator
+            HStack(spacing: 4) {
+                if let interval = progressInterval, abs(media.playbackRate - 1) < 0.001 {
+                    Text(timerInterval: interval, countsDown: false, showsHours: (media.duration ?? 0) >= 3_600)
+                } else {
+                    Text(MediaInfo.formatTime(media.position(at: entry.date)))
+                }
+                Text("/").foregroundStyle(.tertiary)
                 Text(MediaInfo.formatTime(media.duration))
+                Spacer(minLength: 0)
+                if media.capabilities.contains(.canSeek) { seekPanelButton }
             }
-            .font(.system(size: compact ? 8 : 9).monospacedDigit())
+            .font(.system(size: 9).monospacedDigit())
             .foregroundStyle(.secondary)
         }
     }
@@ -247,19 +301,17 @@ struct MediaWidgetView: View {
 
     private func controlsRow(diameter: CGFloat, playDiameter: CGFloat,
                              iconSize: CGFloat, playIconSize: CGFloat, spacing: CGFloat) -> some View {
-        widgetGlassCluster {
-            HStack(spacing: spacing) {
-                if !compact || media.capabilities.contains(.canPreviousTrack) {
-                    control(.previous, title: "上一项", icon: "backward.fill",
-                            diameter: diameter, iconSize: iconSize)
-                }
-                control(media.isPlaying ? .pause : .play, title: media.isPlaying ? "暂停" : "播放",
-                        icon: media.isPlaying ? "pause.fill" : "play.fill",
-                        diameter: playDiameter, iconSize: playIconSize, prominent: true)
-                if !compact || media.capabilities.contains(.canNextTrack) {
-                    control(.next, title: "下一项", icon: "forward.fill",
-                            diameter: diameter, iconSize: iconSize)
-                }
+        HStack(spacing: spacing) {
+            if !compact || media.capabilities.contains(.canPreviousTrack) {
+                control(.previous, title: "上一项", icon: "backward.fill",
+                        diameter: diameter, iconSize: iconSize)
+            }
+            control(media.isPlaying ? .pause : .play, title: media.isPlaying ? "暂停" : "播放",
+                    icon: media.isPlaying ? "pause.fill" : "play.fill",
+                    diameter: playDiameter, iconSize: playIconSize, prominent: true)
+            if !compact || media.capabilities.contains(.canNextTrack) {
+                control(.next, title: "下一项", icon: "forward.fill",
+                        diameter: diameter, iconSize: iconSize)
             }
         }
     }
@@ -273,7 +325,7 @@ struct MediaWidgetView: View {
                 .font(.system(size: iconSize, weight: .semibold))
                 .frame(width: diameter, height: diameter)
                 .contentShape(Circle())
-                .widgetGlass(in: Circle(), interactive: true, tint: prominent ? accent : nil)
+                .widgetControlSurface(in: Circle(), tint: prominent ? accent : nil)
                 .opacity(enabled ? 1 : 0.4)
         }
         .buttonStyle(.plain)
@@ -310,5 +362,17 @@ struct MediaWidgetView: View {
         }
         .shadow(color: Color.black.opacity(0.22), radius: 5, y: 2)
         .accessibilityLabel(media.artworkData == nil ? "封面不可用" : "封面")
+    }
+}
+
+private struct SeekButtonLabelStyle: LabelStyle {
+    let iconOnly: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+            if !iconOnly { configuration.title }
+        }
+        .foregroundStyle(.primary)
     }
 }

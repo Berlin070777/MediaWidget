@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Start listening immediately instead of waiting for the menu bar popover
         // to appear, so the widget and the floating panel always have fresh data.
-        MediaMonitor.shared.startMonitoring()
+        MediaMonitor.shared.startMonitoring { [weak self] in self?.presentFloatingPanel() }
 
         // Development convenience:
         //   defaults write com.mediawidget.app showPanelOnLaunch -bool YES
@@ -216,7 +216,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: FloatingPanelView(showSettings: { [weak self] in self?.presentSettings() }))
         hostingView.translatesAutoresizingMaskIntoConstraints = false
 
-        // Wrap in a container so the rounded corners are clipped reliably.
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = 24
+            glass.contentView = hostingView
+            panel.contentView = glass
+            return panel
+        }
+
         let container = NSVisualEffectView()
         container.material = .hudWindow
         container.blendingMode = .behindWindow

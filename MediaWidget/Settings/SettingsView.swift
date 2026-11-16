@@ -152,13 +152,13 @@ struct SettingsView: View {
         case .permissionRequired:
             "在「隐私与安全性 → 文件与文件夹」展开 MediaWidget，允许访问网易云应用数据后重新检测。也可尝试选择网易云的 storage 文件夹。"
         case .readable:
-            "开始播放一首新歌后，MediaWidget 会用近期曲目记录更新歌名、歌手和封面。"
+            "MediaWidget 会读取网易云保存的当前曲目。若客户端尚未保存曲目信息，切歌后会继续检测。"
         case .databaseMissing:
             "打开网易云并播放一首歌。如果网易云已经在运行，请选择它的 storage 文件夹。"
         case .unsupported:
             "当前网易云版本的记录格式无法识别。播放控制仍可通过辅助功能使用。"
         default:
-            "连接后，MediaWidget 只读本地最新曲目记录。macOS 可能会询问是否允许访问网易云的应用数据。"
+            "连接后，MediaWidget 只读本地当前曲目及对应记录。macOS 可能会询问是否允许访问网易云的应用数据。"
         }
     }
 

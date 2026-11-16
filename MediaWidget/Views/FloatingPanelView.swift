@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct FloatingPanelView: View {
@@ -110,21 +111,27 @@ struct PlayerControls: View {
                 Text(error).foregroundStyle(.orange).font(.caption)
             }
         }
-        .onChange(of: media.sourceID) { seekPosition = nil; mediaVolume = nil }
-        .onChange(of: media.itemID) { seekPosition = nil; mediaVolume = nil }
+        .onChange(of: media.sourceID) { clearDrafts() }
+        .onChange(of: media.itemID) { clearDrafts() }
+    }
+
+    private func clearDrafts() {
+        seekPosition = nil
+        mediaVolume = nil
     }
 
     private func progress(position: Double?) -> some View {
         VStack(spacing: 4) {
             if let duration = media.duration, duration > 0, let position {
                 if media.capabilities.contains(.canSeek) {
-                    Slider(value: Binding(get: { seekPosition ?? position }, set: { seekPosition = $0 }),
-                           in: 0...duration, onEditingChanged: { editing in
-                        guard !editing, let seekPosition else { return }
-                        monitor.seek(seekPosition, for: media)
-                        self.seekPosition = nil
-                    })
-                    .accessibilityLabel("播放进度")
+                    let target = media
+                    PlaybackScrubber(position: position, duration: duration) { draft in
+                        seekPosition = draft
+                    } commit: { value in
+                        seekPosition = nil
+                        monitor.seek(value, for: target)
+                    }
+                    .id(ScrubTarget(source: target.sourceID, item: target.itemID))
                 } else {
                     ProgressView(value: position, total: duration)
                 }
@@ -168,5 +175,63 @@ struct PlayerControls: View {
                 .monospacedDigit().foregroundStyle(.secondary)
         }
         .font(.caption)
+    }
+}
+
+private struct ScrubTarget: Hashable {
+    let source: String
+    let item: String?
+}
+
+private struct PlaybackScrubber: NSViewRepresentable {
+    let position: TimeInterval
+    let duration: TimeInterval
+    let preview: (TimeInterval) -> Void
+    let commit: (TimeInterval) -> Void
+
+    func makeNSView(context: Context) -> Scrubber {
+        let slider = Scrubber()
+        slider.minValue = 0
+        slider.isContinuous = true
+        slider.target = slider
+        slider.action = #selector(Scrubber.changed)
+        slider.setAccessibilityLabel("播放进度")
+        return slider
+    }
+
+    func updateNSView(_ slider: Scrubber, context: Context) {
+        slider.preview = preview
+        slider.commit = commit
+        if !slider.trackingDrag {
+            slider.maxValue = duration
+            slider.doubleValue = position
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Scrubber, context: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return CGSize(width: width, height: nsView.intrinsicContentSize.height)
+    }
+
+    final class Scrubber: NSSlider {
+        private(set) var trackingDrag = false
+        var preview: ((TimeInterval) -> Void)?
+        var commit: ((TimeInterval) -> Void)?
+
+        override func mouseDown(with event: NSEvent) {
+            let commit = self.commit
+            trackingDrag = true
+            super.mouseDown(with: event)
+            trackingDrag = false
+            commit?(doubleValue)
+        }
+
+        @objc func changed() {
+            if trackingDrag {
+                preview?(doubleValue)
+            } else {
+                commit?(doubleValue)
+            }
+        }
     }
 }

@@ -27,7 +27,7 @@ enum NeteaseTrackDatabase {
         case failed(NeteaseDatabaseStatus)
     }
 
-    static func read(in directory: URL) -> Reading {
+    static func read(in directory: URL, trackID: String? = nil) -> Reading {
         let url = directory.appending(path: fileName)
         // Check the file before asking SQLite to open it so the settings can distinguish
         // a missing database from macOS denying access to another app's container.
@@ -53,9 +53,17 @@ enum NeteaseTrackDatabase {
         guard opened == SQLITE_OK, let connection else { return .failed(status(for: opened, connection: connection)) }
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        let query = "SELECT id, playtime, jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1"
+        let query = if trackID == nil {
+            "SELECT id, playtime, jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1"
+        } else {
+            "SELECT id, playtime, jsonStr FROM historyTracks WHERE id = ? LIMIT 1"
+        }
         let prepared = sqlite3_prepare_v2(connection, query, -1, &statement, nil)
         guard prepared == SQLITE_OK else { return .failed(status(for: prepared, connection: connection)) }
+        if let trackID {
+            let bound = sqlite3_bind_text(statement, 1, trackID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            guard bound == SQLITE_OK else { return .failed(status(for: bound, connection: connection)) }
+        }
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { return .track(nil) }
         guard result == SQLITE_ROW else { return .failed(status(for: result, connection: connection)) }

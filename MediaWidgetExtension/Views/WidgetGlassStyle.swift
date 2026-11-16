@@ -20,32 +20,16 @@ enum WidgetSourceStyle {
     }
 }
 
-enum WidgetGlassPreview {
-    #if DEBUG
-    nonisolated(unsafe) static var forceMaterialFallback = false
-    #else
-    static let forceMaterialFallback = false
-    #endif
-}
-
 extension View {
-    @ViewBuilder
-    func widgetGlass<S: InsettableShape>(in shape: S, interactive: Bool = false, tint: Color? = nil) -> some View {
-        if #available(macOS 26, *), !WidgetGlassPreview.forceMaterialFallback {
-            let base: Glass = interactive ? .regular.interactive() : .regular
-            self.glassEffect(tint.map { base.tint($0) } ?? base, in: shape)
-        } else {
-            self.background(.ultraThinMaterial, in: shape)
-                .overlay { shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5) }
-        }
-    }
-
-    @ViewBuilder
-    func widgetGlassCluster<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: 8, content: content)
-        } else {
-            content()
+    func widgetControlSurface<S: InsettableShape>(in shape: S, tint: Color? = nil) -> some View {
+        background(
+            LinearGradient(colors: [tint?.opacity(0.30) ?? Color.primary.opacity(0.14),
+                                    tint?.opacity(0.13) ?? Color.primary.opacity(0.06)],
+                           startPoint: .top, endPoint: .bottom), in: shape
+        )
+        .overlay {
+            shape.strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.20), Color.primary.opacity(0.06)],
+                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
         }
     }
 }

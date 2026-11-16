@@ -20,6 +20,7 @@ final class MediaMonitor: ObservableObject {
     private let controller = MediaController()
     private let store = SharedDefaults.shared
     private var timer: Timer?
+    private var showPanel: (() -> Void)?
     private var refreshTask: Task<Void, Never>?
     private var refreshAgain = false
     private var sleeping = false
@@ -33,8 +34,9 @@ final class MediaMonitor: ObservableObject {
 
     var showArtwork: Bool { UserDefaults.standard.object(forKey: "showArtwork") as? Bool ?? true }
 
-    func startMonitoring() {
+    func startMonitoring(showPanel: @escaping () -> Void) {
         guard !isMonitoring else { return }
+        self.showPanel = showPanel
         isMonitoring = true
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
@@ -68,6 +70,7 @@ final class MediaMonitor: ObservableObject {
 
     func stopMonitoring() {
         isMonitoring = false
+        showPanel = nil
         timer?.invalidate()
         timer = nil
         refreshTask?.cancel()
@@ -159,7 +162,9 @@ final class MediaMonitor: ObservableObject {
     }
 
     func seek(_ position: Double, for media: MediaInfo) {
-        guard let duration = media.duration, position.isFinite, media.capabilities.contains(.canSeek) else { return }
+        guard currentMedia.sourceID == media.sourceID, currentMedia.itemID == media.itemID,
+              let duration = media.duration, duration.isFinite, duration > 0,
+              position.isFinite, media.capabilities.contains(.canSeek) else { return }
         send(.seek, for: media, value: min(max(0, position), duration))
     }
 
@@ -215,7 +220,7 @@ final class MediaMonitor: ObservableObject {
             }
             if !sent && action != .activate {
                 Self.logger.notice("Source did not accept action \(action.rawValue, privacy: .public)")
-                errorMessage = "来源没有接受该操作"
+                errorMessage = action == .seek ? "未确认进度跳转，请检查播放器窗口" : "来源没有接受该操作"
             }
             try? await Task.sleep(for: .milliseconds(450))
             scriptPoll = .distantPast
@@ -226,6 +231,11 @@ final class MediaMonitor: ObservableObject {
     private func readWidgetCommands() {
         guard isMonitoring, !sleeping else { return }
         for command in store.takeCommands() {
+            if command.action == .openPanel {
+                Self.logger.notice("Opening the media panel from the widget")
+                showPanel?()
+                continue
+            }
             if command.action == .selectSource {
                 let sourceIDs = allSources.map(\.sourceID)
                 let next = WidgetSourceSwitchIntent.nextSource(after: preferredSource, in: sourceIDs)
@@ -276,14 +286,21 @@ final class MediaMonitor: ObservableObject {
                                 name: $0.sourceName, title: $0.title, isPlaying: $0.isPlaying)
         }
         let previous = lastSnapshot?.media ?? .empty
+        let previousSources = lastSnapshot?.sources ?? []
+        // The widget presents the active item's title and playback state.
+        // Changes to other tabs' tracks don't change its source selector.
+        let sameSources = previousSources.elementsEqual(summaries) {
+            $0.sourceID == $1.sourceID && $0.bundleID == $1.bundleID && $0.name == $1.name
+        }
+        let positionTolerance: TimeInterval = media.isPlaying ? 4 : 0.75
         let changed = lastSnapshot == nil || lastSnapshot?.showArtwork != artwork ||
-            lastSnapshot?.sources != summaries || lastSnapshot?.preferredSource != preferredSource ||
+            !sameSources || lastSnapshot?.preferredSource != preferredSource ||
             previous.sourceID != media.sourceID || previous.itemID != media.itemID ||
             previous.title != media.title || previous.artist != media.artist || previous.album != media.album ||
             previous.playbackState != media.playbackState || previous.capabilities != media.capabilities ||
             previous.duration != media.duration || previous.volume != media.volume || previous.artworkData != media.artworkData ||
             previous.playbackRate != media.playbackRate || (previous.currentPosition == nil) != (media.currentPosition == nil) ||
-            abs((previous.position(at: now) ?? 0) - (media.position(at: now) ?? 0)) > 4
+            abs((previous.position(at: now) ?? 0) - (media.position(at: now) ?? 0)) > positionTolerance
         let heartbeat = !media.isEmpty && now.timeIntervalSince(lastSnapshot?.writtenAt ?? .distantPast) >= 25
         guard changed || heartbeat || force else { return }
         let snapshot = WidgetSnapshot(media: media, writtenAt: now, showArtwork: artwork,
