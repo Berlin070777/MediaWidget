@@ -11,7 +11,7 @@ final class MediaMonitor: ObservableObject {
     @Published private(set) var allSources: [MediaInfo] = []
     @Published private(set) var systemAudio = SystemAudio.Snapshot()
     @Published private(set) var accessibility = false
-    @Published private(set) var neteaseDatabaseReadable: Bool?
+    @Published private(set) var neteaseDatabaseStatus: NeteaseDatabaseStatus = .notConnected
     @Published private(set) var sharedStorageError = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var preferredSource = ""
@@ -99,8 +99,8 @@ final class MediaMonitor: ObservableObject {
                 return
             }
             if accessibility != reading.accessibility { accessibility = reading.accessibility }
-            if neteaseDatabaseReadable != reading.neteaseDatabaseReadable {
-                neteaseDatabaseReadable = reading.neteaseDatabaseReadable
+            if neteaseDatabaseStatus != reading.neteaseDatabaseStatus {
+                neteaseDatabaseStatus = reading.neteaseDatabaseStatus
             }
             if reading.systemAudio != systemAudio { systemAudio = reading.systemAudio }
             var sources = reading.sources
@@ -124,13 +124,13 @@ final class MediaMonitor: ObservableObject {
 
             let ordered = sources.sorted(by: sourceOrder)
             if allSources != ordered { allSources = ordered }
+            if !preferredSource.isEmpty && !allSources.contains(where: { $0.sourceID == preferredSource }) {
+                preferredSource = ""
+            }
             updateSelection()
             if readArtwork, showArtwork, UserDefaults.standard.object(forKey: "downloadArtwork") as? Bool ?? true,
                let url = urls[currentMedia.sourceID], currentMedia.artworkData == nil {
                 requestArtwork(url)
-            }
-            if !preferredSource.isEmpty && !allSources.contains(where: { $0.sourceID == preferredSource }) {
-                preferredSource = ""
             }
             readWidgetCommands()
             if refreshAgain {
@@ -140,6 +140,11 @@ final class MediaMonitor: ObservableObject {
                 scheduleNextPoll()
             }
         }
+    }
+
+    func retryNeteaseDatabaseAccess() async {
+        await controller.retryNeteaseDatabaseAccess()
+        refreshNowPlaying()
     }
 
     func chooseSource(_ id: String) {
@@ -221,6 +226,16 @@ final class MediaMonitor: ObservableObject {
     private func readWidgetCommands() {
         guard isMonitoring, !sleeping else { return }
         for command in store.takeCommands() {
+            if command.action == .selectSource {
+                let sourceIDs = allSources.map(\.sourceID)
+                let next = WidgetSourceSwitchIntent.nextSource(after: preferredSource, in: sourceIDs)
+                if next != preferredSource {
+                    chooseSource(next)
+                } else {
+                    store.requestWidgetReload()
+                }
+                continue
+            }
             guard [.play, .pause, .previous, .next, .activate].contains(command.action),
                   currentMedia.sourceID == command.sourceID, currentMedia.itemID == command.itemID,
                   !currentMedia.isEmpty else {
@@ -256,8 +271,13 @@ final class MediaMonitor: ObservableObject {
     private func publish(_ media: MediaInfo, force: Bool = false) {
         let now = Date.now
         let artwork = showArtwork
+        let summaries = (media.isEmpty ? [] : allSources).map {
+            WidgetSourceSummary(sourceID: $0.sourceID, bundleID: $0.bundleID,
+                                name: $0.sourceName, title: $0.title, isPlaying: $0.isPlaying)
+        }
         let previous = lastSnapshot?.media ?? .empty
         let changed = lastSnapshot == nil || lastSnapshot?.showArtwork != artwork ||
+            lastSnapshot?.sources != summaries || lastSnapshot?.preferredSource != preferredSource ||
             previous.sourceID != media.sourceID || previous.itemID != media.itemID ||
             previous.title != media.title || previous.artist != media.artist || previous.album != media.album ||
             previous.playbackState != media.playbackState || previous.capabilities != media.capabilities ||
@@ -266,7 +286,8 @@ final class MediaMonitor: ObservableObject {
             abs((previous.position(at: now) ?? 0) - (media.position(at: now) ?? 0)) > 4
         let heartbeat = !media.isEmpty && now.timeIntervalSince(lastSnapshot?.writtenAt ?? .distantPast) >= 25
         guard changed || heartbeat || force else { return }
-        let snapshot = WidgetSnapshot(media: media, writtenAt: now, showArtwork: artwork)
+        let snapshot = WidgetSnapshot(media: media, writtenAt: now, showArtwork: artwork,
+                                      sources: summaries, preferredSource: preferredSource)
         do {
             try store.save(snapshot)
             lastSnapshot = snapshot

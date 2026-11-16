@@ -1,13 +1,42 @@
 import Foundation
 import WidgetKit
 
+struct WidgetSourceSummary: Codable, Hashable, Identifiable, Sendable {
+    let sourceID: String
+    let bundleID: String
+    let name: String
+    let title: String
+    let isPlaying: Bool
+    var id: String { sourceID }
+}
+
 struct WidgetSnapshot: Codable {
     let media: MediaInfo
     let writtenAt: Date
     let showArtwork: Bool
+    let sources: [WidgetSourceSummary]
+    let preferredSource: String
 
     static let maxAge: TimeInterval = 90
     var isFresh: Bool { abs(writtenAt.timeIntervalSinceNow) < Self.maxAge }
+
+    init(media: MediaInfo, writtenAt: Date, showArtwork: Bool,
+         sources: [WidgetSourceSummary] = [], preferredSource: String = "") {
+        self.media = media
+        self.writtenAt = writtenAt
+        self.showArtwork = showArtwork
+        self.sources = sources
+        self.preferredSource = preferredSource
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        media = try container.decode(MediaInfo.self, forKey: .media)
+        writtenAt = try container.decode(Date.self, forKey: .writtenAt)
+        showArtwork = try container.decode(Bool.self, forKey: .showArtwork)
+        sources = try container.decodeIfPresent([WidgetSourceSummary].self, forKey: .sources) ?? []
+        preferredSource = try container.decodeIfPresent(String.self, forKey: .preferredSource) ?? ""
+    }
 }
 
 struct WidgetCommand: Codable {

@@ -1,10 +1,19 @@
 import AppKit
-import SQLite3
 
 final class NeteaseMusicSource {
     static let storageDirectory = FileManager.default.homeDirectoryForCurrentUser.appending(path:
         "Library/Containers/\(Constants.KnownApp.neteaseMusic)/Data/Documents/storage", directoryHint: .isDirectory)
-    static let folderBookmarkKey = "neteaseStorageBookmark"
+    private static let folderBookmarkKey = "neteaseStorageBookmark"
+    private static let accessRequestedKey = "neteaseMetadataAccessRequested"
+
+    static func requestDatabaseAccess() {
+        UserDefaults.standard.set(true, forKey: accessRequestedKey)
+    }
+
+    static func disconnectDatabase() {
+        UserDefaults.standard.removeObject(forKey: folderBookmarkKey)
+        UserDefaults.standard.removeObject(forKey: accessRequestedKey)
+    }
 
     static func storeFolderAccess(_ directory: URL) throws {
         guard directory.standardizedFileURL.path == storageDirectory.standardizedFileURL.path else {
@@ -19,6 +28,7 @@ final class NeteaseMusicSource {
             bookmark = try directory.bookmarkData()
         }
         UserDefaults.standard.set(bookmark, forKey: folderBookmarkKey)
+        requestDatabaseAccess()
     }
 
     private let bundleID = Constants.KnownApp.neteaseMusic
@@ -26,54 +36,44 @@ final class NeteaseMusicSource {
     private var lastReadAttempt = Date.distantPast
     private var bookmark: Data?
     private var selectedFolder: URL?
-    private(set) var databaseReadable: Bool?
+    private(set) var databaseStatus: NeteaseDatabaseStatus = .notConnected
     private var databaseModification: Date?
-    private var cachedTrack: Track?
-    private var confirmedTrack: Track?
+    private var cachedTrack: NeteaseTrack?
+    private var confirmedTrack: NeteaseTrack?
+    private var trackBeforeChange: NeteaseTrack.Identity?
     private var waitingForTrackAfter: Date?
 
-    private struct Track {
-        let id: String
-        let startedAt: Date
-        let title: String?
-        let artist: String?
-        let album: String?
-        let duration: TimeInterval?
-        let artworkURL: URL?
+    func retryDatabaseAccess() {
+        databaseStatus = .checking
+        lastReadAttempt = .distantPast
+        databaseModification = nil
     }
 
     func snapshot(pid: pid_t?) -> MediaInfo? {
         guard let pid, AccessibilityMedia.isTrusted else {
             process = nil
-            databaseReadable = nil
-            confirmedTrack = nil
+            let configured = UserDefaults.standard.bool(forKey: Self.accessRequestedKey)
+                || UserDefaults.standard.data(forKey: Self.folderBookmarkKey) != nil
+            databaseStatus = configured ? .waitingForPlayer : .notConnected
+            clearTrack()
             return nil
         }
         if pid != process {
             process = pid
             databaseModification = nil
             lastReadAttempt = .distantPast
-            confirmedTrack = nil
-            waitingForTrackAfter = nil
+            if databaseStatus != .permissionRequired { databaseStatus = .checking }
+            clearTrack()
         }
-        guard let items = menu(pid), let state = state(items) else { return nil }
         refreshTrack()
-        // The history row can lag behind the menu. Accept only a recent row or one
-        // already observed while this instance of the player was active.
-        if let track = cachedTrack,
-           Date.now.timeIntervalSince(track.startedAt) >= 0,
-           (waitingForTrackAfter.map { track.startedAt >= $0 } ??
-            (confirmedTrack?.id == track.id ||
-             (state == .playing && Date.now.timeIntervalSince(track.startedAt) < 30))) {
-            confirmedTrack = track
-            waitingForTrackAfter = nil
-        }
+        guard let items = menu(pid), let state = state(items) else { return nil }
+        updateConfirmedTrack(state: state, now: .now)
         let track = confirmedTrack
         var capabilities: MediaCapabilities = [.canPlay, .canPause]
         if item(in: items, named: ["下一个", "下一首", "Next"]) != nil { capabilities.insert(.canNextTrack) }
         if item(in: items, named: ["上一个", "上一首", "Previous"]) != nil { capabilities.insert(.canPreviousTrack) }
         return MediaInfo(
-            sourceID: bundleID, bundleID: bundleID, sourceName: "网易云音乐", itemID: track?.id,
+            sourceID: bundleID, bundleID: bundleID, sourceName: "网易云音乐", itemID: track?.identity.id,
             title: track?.title ?? "曲目信息不可用", artist: track?.artist, album: track?.album,
             duration: track?.duration, playbackState: state, capabilities: capabilities
         )
@@ -93,10 +93,15 @@ final class NeteaseMusicSource {
         case .previous: names = ["上一个", "上一首", "Previous"]
         default: return false
         }
+        if command == .next || command == .previous { refreshTrack() }
+        let requestedAt = Date.now
         guard let item = item(in: items, named: names), AccessibilityMedia.press(item) else { return false }
         if command == .next || command == .previous {
+            trackBeforeChange = cachedTrack?.identity ?? confirmedTrack?.identity ?? trackBeforeChange
             confirmedTrack = nil
-            waitingForTrackAfter = Date.now.addingTimeInterval(-0.5)
+            // SQLite stores milliseconds. Allow for truncation of the command timestamp.
+            waitingForTrackAfter = requestedAt.addingTimeInterval(-0.001)
+            lastReadAttempt = .distantPast
         }
         return true
     }
@@ -123,68 +128,84 @@ final class NeteaseMusicSource {
         items.first { names.contains(AccessibilityMedia.title($0)) && AccessibilityMedia.enabled($0) }
     }
 
+    private func clearTrack() {
+        cachedTrack = nil
+        confirmedTrack = nil
+        trackBeforeChange = nil
+        waitingForTrackAfter = nil
+    }
+
+    private func updateConfirmedTrack(state: PlaybackState, now: Date) {
+        guard let track = cachedTrack else { return }
+        if confirmedTrack?.identity == track.identity { return }
+        let age = now.timeIntervalSince(track.identity.startedAt)
+        guard (0..<30).contains(age) else { return }
+        if let waitingForTrackAfter {
+            guard track.identity != trackBeforeChange, track.identity.startedAt >= waitingForTrackAfter else { return }
+        } else {
+            guard state == .playing else { return }
+        }
+        confirmedTrack = track
+        trackBeforeChange = nil
+        waitingForTrackAfter = nil
+    }
+
     private func refreshTrack() {
         let storedBookmark = UserDefaults.standard.data(forKey: Self.folderBookmarkKey)
+        guard storedBookmark != nil || UserDefaults.standard.bool(forKey: Self.accessRequestedKey) else {
+            if databaseStatus != .notConnected {
+                bookmark = nil
+                selectedFolder = nil
+                clearTrack()
+                databaseStatus = .notConnected
+            }
+            return
+        }
         if storedBookmark != bookmark {
             bookmark = storedBookmark
             selectedFolder = nil
-            databaseReadable = nil
-            cachedTrack = nil
-            confirmedTrack = nil
-            databaseModification = nil
-            lastReadAttempt = .distantPast
+            clearTrack()
+            retryDatabaseAccess()
             if let storedBookmark {
                 var stale = false
-                selectedFolder = (try? URL(resolvingBookmarkData: storedBookmark, options: .withSecurityScope,
+                selectedFolder = (try? URL(resolvingBookmarkData: storedBookmark, options: [.withSecurityScope, .withoutUI],
                                            relativeTo: nil, bookmarkDataIsStale: &stale))
                     ?? (try? URL(resolvingBookmarkData: storedBookmark, options: .withoutUI,
                                  relativeTo: nil, bookmarkDataIsStale: &stale))
             }
         }
+        // macOS remembers a denied request. Let the person retry once the
+        // setting changes, without polling the protected file in the meantime.
+        guard databaseStatus != .permissionRequired else { return }
+        let now = Date.now
+        let interval: TimeInterval = databaseStatus == .temporarilyUnavailable ? 5 : 2
+        guard now.timeIntervalSince(lastReadAttempt) >= interval else { return }
         let directory = selectedFolder ?? Self.storageDirectory
         let accessing = selectedFolder?.startAccessingSecurityScopedResource() == true
         defer { if accessing { selectedFolder?.stopAccessingSecurityScopedResource() } }
-        let url = directory.appending(path: "sqlite_storage.sqlite3")
-        let wal = URL(fileURLWithPath: url.path + "-wal")
+        let url = directory.appending(path: NeteaseTrackDatabase.fileName)
+        let wal = directory.appending(path: NeteaseTrackDatabase.fileName + "-wal")
         let modified = [url, wal].compactMap {
             try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         }.max()
-        guard modified != nil || databaseReadable != false else { return }
-        guard databaseModification == nil || modified != databaseModification,
-              Date.now.timeIntervalSince(lastReadAttempt) >= 2 else { return }
-        lastReadAttempt = .now
+        // Occasionally recheck even if filesystem timestamps appear unchanged.
+        if databaseStatus == .readable, let modified, modified == databaseModification,
+           now.timeIntervalSince(lastReadAttempt) < 15 { return }
+        lastReadAttempt = now
 
-        var database: OpaquePointer?
-        defer { sqlite3_close(database) }
-        let opened = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK
-        databaseReadable = opened
-        guard opened else {
-            cachedTrack = nil
-            confirmedTrack = nil
-            return
+        switch NeteaseTrackDatabase.read(in: directory) {
+        case .track(let track):
+            databaseStatus = .readable
+            databaseModification = modified
+            cachedTrack = track
+            if confirmedTrack?.identity != track?.identity { confirmedTrack = nil }
+        case .failed(let status):
+            databaseStatus = status
+            databaseModification = nil
+            if status != .temporarilyUnavailable {
+                cachedTrack = nil
+                confirmedTrack = nil
+            }
         }
-        var statement: OpaquePointer?
-        defer { sqlite3_finalize(statement) }
-        let query = "SELECT id, playtime, jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1"
-        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK,
-              sqlite3_step(statement) == SQLITE_ROW,
-              let id = sqlite3_column_text(statement, 0),
-              let json = sqlite3_column_text(statement, 2),
-              let object = (try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8))) as? [String: Any]
-        else { return }
-        databaseModification = modified
-        let duration = (object["duration"] as? NSNumber)?.doubleValue ?? 0
-        let album = object["album"] as? [String: Any]
-        let artwork = (album?["picUrl"] as? String).flatMap { URL(string: $0.replacingOccurrences(of: "http://", with: "https://")) }
-        cachedTrack = Track(
-            id: String(cString: id),
-            startedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 1)) / 1000),
-            title: (object["name"] as? String)?.nonBlank,
-            artist: (object["artists"] as? [[String: Any]])?.compactMap { $0["name"] as? String }.joined(separator: " / ").nonBlank,
-            album: (album?["name"] as? String)?.nonBlank,
-            duration: duration > 0 && duration.isFinite ? duration / 1000 : nil,
-            artworkURL: artwork
-        )
-        if cachedTrack?.id != confirmedTrack?.id { confirmedTrack = nil }
     }
 }

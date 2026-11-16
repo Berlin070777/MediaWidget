@@ -3,81 +3,230 @@ import WidgetKit
 
 struct MediaWidgetView: View {
     let entry: MediaWidgetEntry
-    @Environment(\.widgetFamily) private var family
+    var familyOverride: WidgetFamily? = nil
+    @Environment(\.widgetFamily) private var environmentFamily
+    @Environment(\.widgetRenderingMode) private var renderingMode
 
+    private var family: WidgetFamily { familyOverride ?? environmentFamily }
     private var media: MediaInfo { entry.mediaInfo }
     private var compact: Bool { family == .systemSmall }
     private var large: Bool { family == .systemLarge }
+    private var palette: ArtworkPalette? {
+        renderingMode == .fullColor && entry.showArtwork ? ArtworkPalette.from(media.artworkData) : nil
+    }
+    private var accent: Color { palette?.accent ?? .accentColor }
 
     var body: some View {
         Group {
             if media.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Image(systemName: "play.circle").font(.title2).foregroundStyle(.secondary)
-                    Text("未检测到媒体").font(.headline)
-                    Text("打开 MediaWidget 并开始播放。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .widgetURL(URL(string: "mediawidget://panel"))
+                emptyState
+            } else if compact {
+                smallLayout
+            } else if large {
+                largeLayout
             } else {
-                VStack(alignment: .leading, spacing: large ? 14 : 5) {
-                    HStack(spacing: large ? 14 : 8) {
-                        if !compact && entry.showArtwork {
-                            artwork(width: large ? 124 : 65, height: large ? 100 : 49)
-                        }
-                        metadata
-                    }
-                    if compact && entry.showArtwork {
-                        artwork(width: 54, height: 46)
-                            .frame(maxWidth: .infinity)
-                    }
-                    if !compact { progress }
-                    HStack(spacing: compact ? 3 : 16) {
-                        Spacer(minLength: 0)
-                        if !compact || media.capabilities.contains(.canPreviousTrack) {
-                            control(.previous, title: "上一项", icon: "backward.fill", size: 13)
-                        }
-                        control(media.isPlaying ? .pause : .play, title: media.isPlaying ? "暂停" : "播放",
-                                icon: media.isPlaying ? "pause.fill" : "play.fill", size: large ? 24 : 17)
-                        if !compact || media.capabilities.contains(.canNextTrack) {
-                            control(.next, title: "下一项", icon: "forward.fill", size: 13)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    if large {
-                        Text("媒体音量 \(media.volume.map { "\(Int(($0 * 100).rounded()))%" } ?? "不可用")")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                mediumLayout
+            }
+        }
+        .tint(accent)
+        .background { ambientWash }
+        .widgetURL(media.isEmpty ? URL(string: "mediawidget://panel") : nil)
+    }
+
+    private var ambientWash: some View {
+        Group {
+            if let palette {
+                RadialGradient(colors: [palette.top.opacity(0.28), palette.bottom.opacity(0.10), .clear],
+                               center: .topLeading, startRadius: 8, endRadius: 300)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Layouts
+
+    private var smallLayout: some View {
+        VStack(spacing: 5) {
+            HStack {
+                sourceChip
+                Spacer(minLength: 0)
+            }
+            VStack(spacing: 4) {
+                if entry.showArtwork {
+                    artworkView(corner: 11).frame(width: 48, height: 48)
+                }
+                mediaLink {
+                    Text(media.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
                 }
             }
+            .frame(maxHeight: .infinity)
+            controlsRow(diameter: 27, playDiameter: 31, iconSize: 10, playIconSize: 13, spacing: 10)
         }
     }
 
-    private var metadata: some View {
-        Button(intent: WidgetPlaybackIntent(.activate, media: media)) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(media.title).font(large ? .headline : .subheadline.bold()).lineLimit(large ? 2 : 1)
-                if !compact {
-                    Text(media.artist ?? "作者不可用").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+    private var mediumLayout: some View {
+        HStack(spacing: 13) {
+            if entry.showArtwork {
+                artworkView(corner: 14).frame(width: 102, height: 102)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                sourceChip
+                mediaLink {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(media.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1)
+                        Text(media.artist ?? "作者不可用")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
-                Text(compact ? media.sourceName : "\(media.sourceName) · \(media.stateLabel)")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 2)
+                progress
+                controlsRow(diameter: 28, playDiameter: 32, iconSize: 11, playIconSize: 14, spacing: 12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var largeLayout: some View {
+        VStack(spacing: 10) {
+            HStack {
+                sourceChip
+                Spacer(minLength: 8)
+                volumeLabel
+            }
+            if entry.showArtwork {
+                artworkView(corner: 16)
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(maxWidth: 200, maxHeight: .infinity)
+            }
+            mediaLink {
+                VStack(spacing: 3) {
+                    Text(media.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                    Text(media.artist ?? "作者不可用")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            progress
+            controlsRow(diameter: 38, playDiameter: 46, iconSize: 15, playIconSize: 19, spacing: 18)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: compact ? 7 : 11) {
+            Spacer(minLength: 0)
+            Image(systemName: "waveform")
+                .font(.system(size: compact ? 20 : 28, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: compact ? 50 : 66, height: compact ? 50 : 66)
+                .widgetGlass(in: Circle())
+            Text("未检测到媒体")
+                .font(.system(size: compact ? 13 : 16, weight: .semibold))
+            Text("开始播放，或点按打开面板选择播放源。")
+                .font(.system(size: compact ? 9 : 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if !compact {
+                Text("打开面板")
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .widgetGlass(in: Capsule())
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Source switcher
+
+    private var chipLabel: String {
+        let pinned = entry.preferredSource
+        if pinned.isEmpty {
+            return media.isEmpty ? "自动选择" : "自动 · \(WidgetSourceStyle.shortName(media.sourceName))"
+        }
+        let name = entry.sources.first { $0.sourceID == pinned }?.name ?? media.sourceName
+        return WidgetSourceStyle.shortName(name)
+    }
+
+    private var chipBundleID: String {
+        guard !entry.preferredSource.isEmpty,
+              let pinned = entry.sources.first(where: { $0.sourceID == entry.preferredSource }) else {
+            return media.bundleID
+        }
+        return pinned.bundleID
+    }
+
+    private var canSwitchSource: Bool { entry.sources.count > 1 || !entry.preferredSource.isEmpty }
+
+    private var sourceChip: some View {
+        Button(intent: WidgetSourceSwitchIntent()) {
+            HStack(spacing: 4) {
+                Image(systemName: WidgetSourceStyle.icon(for: chipBundleID))
+                    .font(.system(size: compact ? 8 : 9, weight: .semibold))
+                Text(chipLabel)
+                    .font(.system(size: compact ? 9 : 10, weight: .medium))
+                    .lineLimit(1)
+                if !compact {
+                    Circle()
+                        .fill(media.isPlaying ? Color.green : Color.secondary)
+                        .frame(width: 5, height: 5)
+                }
+                if canSwitchSource {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: compact ? 6.5 : 7.5, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, compact ? 7 : 9)
+            .padding(.vertical, compact ? 3.5 : 5)
+            .contentShape(Capsule())
+            .widgetGlass(in: Capsule(), interactive: canSwitchSource)
+        }
+        .buttonStyle(.plain)
+        .invalidatableContent()
+        .disabled(!canSwitchSource)
+        .accessibilityLabel(canSwitchSource ? "切换播放源，当前为\(chipLabel)" : "当前来源为\(chipLabel)")
+        .accessibilityHint(canSwitchSource ? "点按切换到下一个播放源" : "")
+    }
+
+    // MARK: - Metadata
+
+    private func mediaLink<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        Button(intent: WidgetPlaybackIntent(.activate, media: media)) {
+            label().contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityHint("打开来源应用")
     }
 
+    private var volumeLabel: some View {
+        Label(media.volume.map { "媒体音量 \(Int(($0 * 100).rounded()))%" } ?? "媒体音量不可用",
+              systemImage: "speaker.wave.2.fill")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
     private var progress: some View {
         let position = media.position(at: entry.date)
-        return VStack(spacing: 2) {
+        return VStack(spacing: 3) {
             if let duration = media.duration, duration > 0, let position {
                 GeometryReader { geometry in
                     Capsule().fill(.quaternary)
                         .overlay(alignment: .leading) {
-                            Capsule().fill(.tint)
+                            Capsule()
+                                .fill(LinearGradient(colors: [accent, accent.opacity(0.65)],
+                                                     startPoint: .leading, endPoint: .trailing))
                                 .frame(width: geometry.size.width * min(max(position / duration, 0), 1))
                         }
                 }
@@ -89,44 +238,77 @@ struct MediaWidgetView: View {
                 Spacer()
                 Text(MediaInfo.formatTime(media.duration))
             }
-            .font(.caption2.monospacedDigit())
+            .font(.system(size: compact ? 8 : 9).monospacedDigit())
             .foregroundStyle(.secondary)
         }
     }
 
-    private func control(_ action: WidgetPlaybackAction, title: String, icon: String, size: CGFloat) -> some View {
-        Button(intent: WidgetPlaybackIntent(action, media: media)) {
-            Image(systemName: icon).font(.system(size: size))
-                .frame(minWidth: 30, minHeight: 26)
-                .contentShape(Rectangle())
+    // MARK: - Controls
+
+    private func controlsRow(diameter: CGFloat, playDiameter: CGFloat,
+                             iconSize: CGFloat, playIconSize: CGFloat, spacing: CGFloat) -> some View {
+        widgetGlassCluster {
+            HStack(spacing: spacing) {
+                if !compact || media.capabilities.contains(.canPreviousTrack) {
+                    control(.previous, title: "上一项", icon: "backward.fill",
+                            diameter: diameter, iconSize: iconSize)
+                }
+                control(media.isPlaying ? .pause : .play, title: media.isPlaying ? "暂停" : "播放",
+                        icon: media.isPlaying ? "pause.fill" : "play.fill",
+                        diameter: playDiameter, iconSize: playIconSize, prominent: true)
+                if !compact || media.capabilities.contains(.canNextTrack) {
+                    control(.next, title: "下一项", icon: "forward.fill",
+                            diameter: diameter, iconSize: iconSize)
+                }
+            }
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .accessibilityLabel(title)
-        .invalidatableContent()
-        .disabled(!(MediaCommand(rawValue: action.rawValue).map { media.capabilities.contains($0.capability) } ?? false))
     }
 
-    private func artwork(width: CGFloat, height: CGFloat) -> some View {
+    private func control(_ action: WidgetPlaybackAction, title: String, icon: String,
+                         diameter: CGFloat, iconSize: CGFloat, prominent: Bool = false) -> some View {
+        let enabled = MediaCommand(rawValue: action.rawValue)
+            .map { media.capabilities.contains($0.capability) } ?? false
+        return Button(intent: WidgetPlaybackIntent(action, media: media)) {
+            Image(systemName: icon)
+                .font(.system(size: iconSize, weight: .semibold))
+                .frame(width: diameter, height: diameter)
+                .contentShape(Circle())
+                .widgetGlass(in: Circle(), interactive: true, tint: prominent ? accent : nil)
+                .opacity(enabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .invalidatableContent()
+        .disabled(!enabled)
+    }
+
+    // MARK: - Artwork
+
+    private func artworkView(corner: CGFloat) -> some View {
         Group {
             if let data = media.artworkData, let image = NSImage(data: data) {
                 let artwork = Image(nsImage: image).resizable()
                 if #available(macOS 26, *) {
-                    artwork.widgetAccentedRenderingMode(.fullColor)
-                        .scaledToFill().accessibilityLabel("封面")
+                    artwork.widgetAccentedRenderingMode(.fullColor).scaledToFill()
                 } else {
-                    artwork.scaledToFill().accessibilityLabel("封面")
+                    artwork.scaledToFill()
                 }
             } else {
-                ZStack {
-                    Rectangle().fill(.quaternary)
-                    Image(systemName: "music.note").font(.system(size: height * 0.38)).foregroundStyle(.secondary)
+                GeometryReader { geometry in
+                    ZStack {
+                        Rectangle().fill(.quaternary)
+                        Image(systemName: "music.note")
+                            .font(.system(size: min(geometry.size.width, geometry.size.height) * 0.34))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .accessibilityLabel("封面不可用")
             }
         }
-        .frame(width: width, height: height)
-        .clipped()
-        .clipShape(.rect(cornerRadius: 7))
+        .clipShape(.rect(cornerRadius: corner))
+        .overlay {
+            RoundedRectangle(cornerRadius: corner).strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5)
+        }
+        .shadow(color: Color.black.opacity(0.22), radius: 5, y: 2)
+        .accessibilityLabel(media.artworkData == nil ? "封面不可用" : "封面")
     }
 }

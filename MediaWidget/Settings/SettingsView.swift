@@ -77,12 +77,28 @@ struct SettingsView: View {
                 }
             }
             Section("网易云曲目与封面") {
-                LabeledContent("曲目数据库", value: monitor.neteaseDatabaseReadable == true ? "可读取" :
-                                monitor.neteaseDatabaseReadable == false ? "无法读取" : "等待网易云")
+                LabeledContent("曲目数据库", value: neteaseDatabaseLabel)
+                if monitor.neteaseDatabaseStatus == .notConnected {
+                    Button("连接网易云曲目信息", action: connectNetease)
+                } else {
+                    Button("重新检测曲目数据库", action: connectNetease)
+                    Button("停用曲目信息") {
+                        NeteaseMusicSource.disconnectDatabase()
+                        neteaseAccessError = nil
+                        monitor.refreshNowPlaying()
+                    }
+                }
+                if monitor.neteaseDatabaseStatus == .permissionRequired {
+                    Button("打开文件与文件夹设置") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
                 Button("选择网易云存储文件夹…", action: chooseNeteaseFolder)
-                Text(neteaseAccessError ?? "选择网易云的 storage 文件夹。若选择器未定位，按 ⌘⇧G 输入下方路径。")
+                Text(neteaseAccessError ?? neteaseDatabaseHelp)
                     .font(.caption).foregroundStyle(.secondary)
-                if monitor.neteaseDatabaseReadable != true {
+                if monitor.neteaseDatabaseStatus == .permissionRequired || monitor.neteaseDatabaseStatus == .databaseMissing {
                     Text("~/Library/Containers/com.netease.163music/Data/Documents/storage")
                         .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -118,6 +134,40 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var neteaseDatabaseLabel: String {
+        switch monitor.neteaseDatabaseStatus {
+        case .waitingForPlayer: "等待网易云和辅助功能"
+        case .notConnected: "未连接"
+        case .checking: "正在检查"
+        case .readable: "可读取"
+        case .permissionRequired: "macOS 已拒绝访问"
+        case .databaseMissing: "找不到曲目数据库"
+        case .unsupported: "无法识别数据库格式"
+        case .temporarilyUnavailable: "暂时无法读取"
+        }
+    }
+
+    private var neteaseDatabaseHelp: String {
+        switch monitor.neteaseDatabaseStatus {
+        case .permissionRequired:
+            "在「隐私与安全性 → 文件与文件夹」展开 MediaWidget，允许访问网易云应用数据后重新检测。也可尝试选择网易云的 storage 文件夹。"
+        case .readable:
+            "开始播放一首新歌后，MediaWidget 会用近期曲目记录更新歌名、歌手和封面。"
+        case .databaseMissing:
+            "打开网易云并播放一首歌。如果网易云已经在运行，请选择它的 storage 文件夹。"
+        case .unsupported:
+            "当前网易云版本的记录格式无法识别。播放控制仍可通过辅助功能使用。"
+        default:
+            "连接后，MediaWidget 只读本地最新曲目记录。macOS 可能会询问是否允许访问网易云的应用数据。"
+        }
+    }
+
+    private func connectNetease() {
+        NeteaseMusicSource.requestDatabaseAccess()
+        neteaseAccessError = nil
+        Task { await monitor.retryNeteaseDatabaseAccess() }
+    }
+
     private func chooseNeteaseFolder() {
         let panel = NSOpenPanel()
         panel.title = "选择网易云音乐的 storage 文件夹"
@@ -130,10 +180,11 @@ struct SettingsView: View {
         if panel.runModal() == .OK, let directory = panel.url {
             do {
                 try NeteaseMusicSource.storeFolderAccess(directory)
-                neteaseAccessError = nil
-                monitor.refreshNowPlaying()
-            } catch {
+                connectNetease()
+            } catch CocoaError.fileReadInvalidFileName {
                 neteaseAccessError = "请选择网易云音乐的 storage 文件夹。"
+            } catch {
+                neteaseAccessError = "无法保存所选文件夹。可在「文件与文件夹」允许访问后重新检测。"
             }
         }
     }

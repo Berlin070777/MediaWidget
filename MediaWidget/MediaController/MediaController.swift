@@ -8,7 +8,7 @@ actor MediaController {
         let sources: [MediaInfo]
         let artworkURLs: [String: URL]
         let accessibility: Bool
-        let neteaseDatabaseReadable: Bool?
+        let neteaseDatabaseStatus: NeteaseDatabaseStatus
         let systemAudio: SystemAudio.Snapshot
     }
 
@@ -31,9 +31,11 @@ actor MediaController {
             return media
         }
         return Reading(sources: sources, artworkURLs: artworkURLs,
-                       accessibility: AccessibilityMedia.isTrusted, neteaseDatabaseReadable: netease.databaseReadable,
+                       accessibility: AccessibilityMedia.isTrusted, neteaseDatabaseStatus: netease.databaseStatus,
                        systemAudio: SystemAudio.snapshot())
     }
+
+    func retryNeteaseDatabaseAccess() { netease.retryDatabaseAccess() }
 
     func perform(_ action: MediaCommand, media: MediaInfo, pid: pid_t?, value: Double?) -> Bool {
         if BrowserKind.kind(for: media.sourceID) != nil {

@@ -20,7 +20,7 @@ enum PlaybackState: String, Codable, Sendable {
 }
 
 enum MediaCommand: String, Codable, Sendable {
-    case play, pause, next, previous, seek, volume, activate
+    case play, pause, next, previous, seek, volume, activate, selectSource
 
     var capability: MediaCapabilities {
         switch self {
@@ -30,7 +30,7 @@ enum MediaCommand: String, Codable, Sendable {
         case .previous: .canPreviousTrack
         case .seek: .canSeek
         case .volume: .canSetVolume
-        case .activate: []
+        case .activate, .selectSource: []
         }
     }
 }

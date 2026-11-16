@@ -42,7 +42,7 @@ enum ScriptingPlayerSource {
         case .previous: command = "previous track"
         case .seek: command = "set player position to \(Int(value ?? 0))"
         case .volume: command = "set sound volume to \(Int((value ?? 0) * 100))"
-        case .activate: return false
+        case .activate, .selectSource: return false
         }
         return execute(command + "\nreturn true", bundleID: bundleID)?.booleanValue == true
     }
