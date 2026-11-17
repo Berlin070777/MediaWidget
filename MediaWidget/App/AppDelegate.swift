@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The floating panel, created lazily on first use.
     private var floatingPanel: NSPanel?
     private var preferencesWindow: NSWindow?
+    private let panelNavigation = FloatingPanelNavigation()
 
     /// Carbon hot key registration handle.
     private var hotKeyRef: EventHotKeyRef?
@@ -34,7 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Start listening immediately instead of waiting for the menu bar popover
         // to appear, so the widget and the floating panel always have fresh data.
-        MediaMonitor.shared.startMonitoring { [weak self] in self?.presentFloatingPanel() }
+        MediaMonitor.shared.startMonitoring(
+            showPanel: { [weak self] in self?.presentFloatingPanel() },
+            showSources: { [weak self] in self?.presentFloatingPanel(choosingSource: true) }
+        )
 
         // Development convenience:
         //   defaults write com.mediawidget.app showPanelOnLaunch -bool YES
@@ -49,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for url in urls where url.scheme == "mediawidget" {
             switch url.host {
             case "panel": presentFloatingPanel()
+            case "sources": presentFloatingPanel(choosingSource: true)
             case "settings": presentSettings()
             default: break
             }
@@ -147,7 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Brings the floating panel on screen, creating it on first use.
-    func presentFloatingPanel() {
+    func presentFloatingPanel(choosingSource: Bool = false) {
+        panelNavigation.isChoosingSource = choosingSource
+        if choosingSource { MediaMonitor.shared.refreshNowPlaying() }
         if floatingPanel == nil {
             floatingPanel = makeFloatingPanel()
             floatingPanel?.center()
@@ -213,7 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
 
-        let hostingView = NSHostingView(rootView: FloatingPanelView(showSettings: { [weak self] in self?.presentSettings() }))
+        let hostingView = NSHostingView(rootView: FloatingPanelView(navigation: panelNavigation) { [weak self] in
+            self?.presentSettings()
+        })
         hostingView.translatesAutoresizingMaskIntoConstraints = false
 
         if #available(macOS 26, *) {

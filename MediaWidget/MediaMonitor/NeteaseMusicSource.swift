@@ -43,8 +43,12 @@ final class NeteaseMusicSource {
     private var databaseModification: Date?
     private var cachedTrack: NeteaseTrack?
     private var confirmedTrack: NeteaseTrack?
-    private var trackBeforeChange: NeteaseTrack.Identity?
-    private var waitingForTrackAfter: Date?
+    private struct PendingChange {
+        let previousID: String?
+        let requestedAt: Date
+    }
+
+    private var pendingChange: PendingChange?
 
     func retryDatabaseAccess() {
         databaseStatus = .checking
@@ -105,16 +109,21 @@ final class NeteaseMusicSource {
         case .previous: names = ["上一个", "上一首", "Previous"]
         default: return false
         }
-        if command == .next || command == .previous { refreshTrack() }
+        let isTrackChange = command == .next || command == .previous
+        let previousID: String?
+        if isTrackChange, databaseStatus == .readable {
+            previousID = withStorageAccess { playbackStateFile.read(in: $0) }?.trackID ?? confirmedTrack?.identity.id
+        } else {
+            previousID = nil
+        }
         let requestedAt = Date.now
         guard let item = item(in: items, named: names), AccessibilityMedia.press(item) else { return false }
-        if command == .next || command == .previous {
-            trackBeforeChange = confirmedTrack?.identity ?? trackBeforeChange ?? cachedTrack?.identity
+        if isTrackChange {
+            pendingChange = PendingChange(previousID: previousID, requestedAt: requestedAt)
             confirmedTrack = nil
             progress = NeteaseProgress()
-            // SQLite stores milliseconds. Allow for truncation of the command timestamp.
-            waitingForTrackAfter = requestedAt.addingTimeInterval(-0.001)
             lastReadAttempt = .distantPast
+            lastLookup = nil
         }
         return true
     }
@@ -153,8 +162,7 @@ final class NeteaseMusicSource {
         playbackStateFile = NeteasePlaybackState()
         progress = NeteaseProgress()
         lastLookup = nil
-        trackBeforeChange = nil
-        waitingForTrackAfter = nil
+        pendingChange = nil
     }
 
     private func withStorageAccess<T>(_ read: (URL) -> T) -> T {
@@ -165,28 +173,39 @@ final class NeteaseMusicSource {
     }
 
     private func updateConfirmedTrack(state: PlaybackState, savedTrackID: String?, now: Date) {
-        if let track = cachedTrack {
-            if confirmedTrack?.identity == track.identity { return }
-            let age = now.timeIntervalSince(track.identity.startedAt)
-            let matchesChange = waitingForTrackAfter.map {
-                track.identity != trackBeforeChange && track.identity.startedAt >= $0
-            }
-            if age >= 0 && (matchesChange ?? (state == .playing && age < 30)) {
-                confirmedTrack = track
-                trackBeforeChange = nil
-                waitingForTrackAfter = nil
+        if let pendingChange {
+            let savedTrackChanged = savedTrackID.map { $0 != pendingChange.previousID } ?? false
+            if !savedTrackChanged && now.timeIntervalSince(pendingChange.requestedAt) < 8 {
+                // A skip can be ignored or replay the same track. Wait briefly for
+                // the ID to change before accepting that track's artwork again.
                 return
             }
+            self.pendingChange = nil
         }
-        guard confirmedTrack == nil, waitingForTrackAfter == nil, let id = savedTrackID else { return }
 
-        if let track = cachedTrack, track.identity.id == id {
-            confirmedTrack = track
-        } else {
+        if let id = savedTrackID {
+            if confirmedTrack?.identity.id != id { confirmedTrack = nil }
+            if let current = playbackStateFile.currentTrack,
+               current.artworkURL != nil || confirmedTrack?.artworkURL == nil {
+                confirmedTrack = current
+            }
+            if let history = cachedTrack, history.identity.id == id,
+               confirmedTrack == nil || (confirmedTrack?.artworkURL == nil && history.artworkURL != nil) {
+                confirmedTrack = history
+            }
+            guard confirmedTrack?.artworkURL == nil else { return }
             if let lastLookup, lastLookup.id == id, now.timeIntervalSince(lastLookup.date) < 15 { return }
             lastLookup = (id, now)
-            guard case .track(let track?) = withStorageAccess({ NeteaseTrackDatabase.read(in: $0, trackID: id) }) else { return }
-            confirmedTrack = track
+            if case .track(let track?) = withStorageAccess({ NeteaseTrackDatabase.read(in: $0, trackID: id) }),
+               confirmedTrack == nil || track.artworkURL != nil {
+                confirmedTrack = track
+            }
+            return
+        }
+
+        if let history = cachedTrack, let startedAt = history.identity.startedAt, state == .playing,
+           (0..<30).contains(now.timeIntervalSince(startedAt)) {
+            confirmedTrack = history
         }
     }
 
@@ -237,9 +256,6 @@ final class NeteaseMusicSource {
         case .track(let track):
             databaseStatus = .readable
             databaseModification = modified
-            if cachedTrack?.identity != track?.identity, confirmedTrack?.identity != track?.identity {
-                confirmedTrack = nil
-            }
             cachedTrack = track
         case .failed(let status):
             databaseStatus = status

@@ -1,8 +1,15 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+@Observable
+final class FloatingPanelNavigation {
+    var isChoosingSource = false
+}
+
 struct FloatingPanelView: View {
     @ObservedObject private var monitor = MediaMonitor.shared
+    @Bindable var navigation: FloatingPanelNavigation
     let showSettings: () -> Void
 
     var body: some View {
@@ -15,7 +22,7 @@ struct FloatingPanelView: View {
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
             }
-            PlayerControls(monitor: monitor, artworkSize: 76)
+            PlayerControls(monitor: monitor, artworkSize: 76, isChoosingSource: $navigation.isChoosingSource)
             Spacer(minLength: 0)
         }
         .padding(EdgeInsets(top: 36, leading: 18, bottom: 14, trailing: 18))
@@ -27,6 +34,7 @@ struct FloatingPanelView: View {
 struct PlayerControls: View {
     @ObservedObject var monitor: MediaMonitor
     let artworkSize: CGFloat
+    @Binding var isChoosingSource: Bool
 
     @State private var seekPosition: Double?
     @State private var mediaVolume: Double?
@@ -35,19 +43,40 @@ struct PlayerControls: View {
     private var media: MediaInfo { monitor.currentMedia }
 
     var body: some View {
+        if isChoosingSource {
+            PlaybackSourcePicker(monitor: monitor, isPresented: $isChoosingSource)
+        } else {
+            controls
+        }
+    }
+
+    private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !monitor.allSources.isEmpty {
-                Picker("播放源", selection: Binding(
-                    get: { monitor.allSources.contains { $0.sourceID == monitor.preferredSource } ? monitor.preferredSource : "" },
-                    set: { id in monitor.chooseSource(id) }
-                )) {
-                    Text("自动选择").tag("")
-                    ForEach(monitor.allSources) { source in
-                        Text("\(source.sourceName) · \(source.title)").tag(source.sourceID)
-                    }
+            Button {
+                clearDrafts()
+                isChoosingSource = true
+                monitor.refreshNowPlaying()
+            } label: {
+                HStack(spacing: 7) {
+                    Label("播放源", systemImage: "rectangle.on.rectangle")
+                        .font(.caption.weight(.medium))
+                    Spacer(minLength: 8)
+                    Text(monitor.preferredSource.isEmpty ? "自动选择" : media.sourceName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .pickerStyle(.menu)
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(.primary.opacity(0.07), in: .rect(cornerRadius: 8))
+                .contentShape(.rect(cornerRadius: 8))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("选择播放源")
+            .accessibilityValue(monitor.preferredSource.isEmpty ? "自动选择" : media.sourceName)
 
             if media.isEmpty {
                 Text(media.title).font(.headline)

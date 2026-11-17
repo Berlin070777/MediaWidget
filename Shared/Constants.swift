@@ -4,6 +4,7 @@ enum Constants {
     static let appGroupID = Bundle.main.object(forInfoDictionaryKey: "MediaWidgetAppGroup") as? String ?? ""
     static let widgetBundleID = "com.mediawidget.app.widget"
     static let widgetKind = "MediaControlWidget"
+    static let sourcePickerURL = URL(string: "mediawidget://sources")!
     static let commandNotification = "com.mediawidget.app.widget-command.v2"
 
     enum KnownApp {

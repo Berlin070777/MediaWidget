@@ -8,7 +8,7 @@ enum NeteaseDatabaseStatus: Sendable {
 struct NeteaseTrack {
     struct Identity: Equatable {
         let id: String
-        let startedAt: Date
+        let startedAt: Date?
     }
 
     let identity: Identity
@@ -17,6 +17,20 @@ struct NeteaseTrack {
     let album: String?
     let duration: TimeInterval?
     let artworkURL: URL?
+
+    init(id: String, startedAt: Date? = nil, metadata: [String: Any]) {
+        identity = Identity(id: id, startedAt: startedAt)
+        title = (metadata["name"] as? String)?.nonBlank
+        let durationMS = ((metadata["duration"] ?? metadata["dt"]) as? NSNumber)?.doubleValue
+        duration = durationMS.flatMap { $0.isFinite && $0 > 0 ? $0 / 1_000 : nil }
+        let artists = (metadata["artists"] ?? metadata["ar"]) as? [[String: Any]]
+        artist = artists?.compactMap { ($0["name"] as? String)?.nonBlank }.joined(separator: " / ").nonBlank
+        let albumMetadata = (metadata["album"] ?? metadata["al"]) as? [String: Any]
+        album = (albumMetadata?["name"] as? String)?.nonBlank
+        var cover = (albumMetadata?["picUrl"] as? String)?.nonBlank.flatMap { URLComponents(string: $0) }
+        if cover?.scheme == "http" { cover?.scheme = "https" }
+        artworkURL = cover?.url
+    }
 }
 
 enum NeteaseTrackDatabase {
@@ -72,19 +86,8 @@ enum NeteaseTrackDatabase {
               let identifier = String(cString: id).nonBlank else { return .failed(.unsupported) }
         let playtime = sqlite3_column_int64(statement, 1)
         guard playtime > 0 else { return .failed(.unsupported) }
-        let duration = ((object["duration"] ?? object["dt"]) as? NSNumber)?.doubleValue
-        let album = (object["album"] ?? object["al"]) as? [String: Any]
-        let artists = (object["artists"] ?? object["ar"]) as? [[String: Any]]
-        var cover = (album?["picUrl"] as? String).flatMap { URLComponents(string: $0) }
-        if cover?.scheme == "http" { cover?.scheme = "https" }
-        return .track(NeteaseTrack(
-            identity: .init(id: identifier, startedAt: Date(timeIntervalSince1970: Double(playtime) / 1_000)),
-            title: (object["name"] as? String)?.nonBlank,
-            artist: artists?.compactMap { ($0["name"] as? String)?.nonBlank }.joined(separator: " / ").nonBlank,
-            album: (album?["name"] as? String)?.nonBlank,
-            duration: duration.flatMap { $0.isFinite && $0 > 0 ? $0 / 1_000 : nil },
-            artworkURL: cover?.url
-        ))
+        return .track(NeteaseTrack(id: identifier, startedAt: Date(timeIntervalSince1970: Double(playtime) / 1_000),
+                                   metadata: object))
     }
 
     private static func status(for result: Int32, connection: OpaquePointer?) -> NeteaseDatabaseStatus {

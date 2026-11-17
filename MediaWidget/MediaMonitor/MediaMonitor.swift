@@ -21,6 +21,7 @@ final class MediaMonitor: ObservableObject {
     private let store = SharedDefaults.shared
     private var timer: Timer?
     private var showPanel: (() -> Void)?
+    private var showSources: (() -> Void)?
     private var refreshTask: Task<Void, Never>?
     private var refreshAgain = false
     private var sleeping = false
@@ -34,9 +35,10 @@ final class MediaMonitor: ObservableObject {
 
     var showArtwork: Bool { UserDefaults.standard.object(forKey: "showArtwork") as? Bool ?? true }
 
-    func startMonitoring(showPanel: @escaping () -> Void) {
+    func startMonitoring(showPanel: @escaping () -> Void, showSources: @escaping () -> Void) {
         guard !isMonitoring else { return }
         self.showPanel = showPanel
+        self.showSources = showSources
         isMonitoring = true
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
@@ -71,6 +73,7 @@ final class MediaMonitor: ObservableObject {
     func stopMonitoring() {
         isMonitoring = false
         showPanel = nil
+        showSources = nil
         timer?.invalidate()
         timer = nil
         refreshTask?.cancel()
@@ -150,10 +153,19 @@ final class MediaMonitor: ObservableObject {
         refreshNowPlaying()
     }
 
-    func chooseSource(_ id: String) {
-        preferredSource = id
-        updateSelection()
-        refreshNowPlaying()
+    @discardableResult
+    func chooseSource(_ id: String) -> Bool {
+        guard id.isEmpty || allSources.contains(where: { $0.sourceID == id }) else {
+            refreshNowPlaying()
+            return false
+        }
+        if preferredSource != id {
+            preferredSource = id
+            errorMessage = nil
+            updateSelection()
+            refreshNowPlaying()
+        }
+        return true
     }
 
     func submit(_ action: MediaCommand, for media: MediaInfo) {
@@ -237,13 +249,7 @@ final class MediaMonitor: ObservableObject {
                 continue
             }
             if command.action == .selectSource {
-                let sourceIDs = allSources.map(\.sourceID)
-                let next = WidgetSourceSwitchIntent.nextSource(after: preferredSource, in: sourceIDs)
-                if next != preferredSource {
-                    chooseSource(next)
-                } else {
-                    store.requestWidgetReload()
-                }
+                showSources?()
                 continue
             }
             guard [.play, .pause, .previous, .next, .activate].contains(command.action),

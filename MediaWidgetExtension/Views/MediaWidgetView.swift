@@ -30,7 +30,7 @@ struct MediaWidgetView: View {
         }
         .tint(accent)
         .background { ambientWash }
-        .widgetURL(media.isEmpty ? URL(string: "mediawidget://panel") : nil)
+        .widgetURL(media.isEmpty ? Constants.sourcePickerURL : nil)
     }
 
     private var ambientWash: some View {
@@ -134,12 +134,11 @@ struct MediaWidgetView: View {
                 .widgetControlSurface(in: Circle())
             Text("未检测到媒体")
                 .font(.system(size: compact ? 13 : 16, weight: .semibold))
-            Text("开始播放，或点按打开面板选择播放源。")
+            Text("开始播放后即可选择来源")
                 .font(.system(size: compact ? 9 : 11))
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
             if !compact {
-                Text("打开面板")
+                Text("查看播放源")
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -152,54 +151,31 @@ struct MediaWidgetView: View {
 
     // MARK: - Source switcher
 
-    private var chipLabel: String {
-        let pinned = entry.preferredSource
-        if pinned.isEmpty {
-            return media.isEmpty ? "自动选择" : "自动 · \(WidgetSourceStyle.shortName(media.sourceName))"
-        }
-        let name = entry.sources.first { $0.sourceID == pinned }?.name ?? media.sourceName
-        return WidgetSourceStyle.shortName(name)
-    }
-
-    private var chipBundleID: String {
-        guard !entry.preferredSource.isEmpty,
-              let pinned = entry.sources.first(where: { $0.sourceID == entry.preferredSource }) else {
-            return media.bundleID
-        }
-        return pinned.bundleID
-    }
-
-    private var canSwitchSource: Bool { entry.sources.count > 1 || !entry.preferredSource.isEmpty }
-
     private var sourceChip: some View {
-        Button(intent: WidgetSourceSwitchIntent()) {
-            HStack(spacing: 4) {
-                Image(systemName: WidgetSourceStyle.icon(for: chipBundleID))
+        let name = WidgetSourceStyle.shortName(media.sourceName)
+        let automatic = entry.preferredSource.isEmpty
+        return Link(destination: Constants.sourcePickerURL) {
+            HStack(spacing: 5) {
+                Image(systemName: media.sourceSymbol)
                     .font(.system(size: compact ? 8 : 9, weight: .semibold))
-                Text(chipLabel)
+                Text(automatic && !compact ? "自动 · \(name)" : name)
                     .font(.system(size: compact ? 9 : 10, weight: .medium))
                     .lineLimit(1)
-                if !compact {
-                    Circle()
-                        .fill(media.isPlaying ? Color.green : Color.secondary)
-                        .frame(width: 5, height: 5)
+                if !compact && media.isPlaying {
+                    Circle().fill(.green).frame(width: 5, height: 5)
                 }
-                if canSwitchSource {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: compact ? 6.5 : 7.5, weight: .bold))
-                        .foregroundStyle(.secondary)
-                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: compact ? 7 : 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, compact ? 7 : 9)
-            .padding(.vertical, compact ? 3.5 : 5)
+            .frame(minHeight: 22)
             .contentShape(Capsule())
             .widgetControlSurface(in: Capsule())
         }
         .buttonStyle(.plain)
-        .invalidatableContent()
-        .disabled(!canSwitchSource)
-        .accessibilityLabel(canSwitchSource ? "切换播放源，当前为\(chipLabel)" : "当前来源为\(chipLabel)")
-        .accessibilityHint(canSwitchSource ? "点按切换到下一个播放源" : "")
+        .accessibilityLabel("选择播放源，当前为\(automatic ? "自动 · " : "")\(name)")
+        .accessibilityHint("打开可用播放源列表")
     }
 
     // MARK: - Metadata

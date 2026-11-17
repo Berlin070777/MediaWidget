@@ -4,10 +4,11 @@ struct MenuBarView: View {
     @ObservedObject var monitor: MediaMonitor
     let showPanel: () -> Void
     let showSettings: () -> Void
+    @State private var isChoosingSource = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            PlayerControls(monitor: monitor, artworkSize: 58)
+            PlayerControls(monitor: monitor, artworkSize: 58, isChoosingSource: $isChoosingSource)
             Divider()
             HStack {
                 Button("悬浮面板", systemImage: "macwindow") {

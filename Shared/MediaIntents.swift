@@ -64,36 +64,15 @@ struct WidgetPlaybackIntent: AudioPlaybackIntent {
     }
 }
 
+// Cached widget timelines from older builds can still invoke this intent.
 struct WidgetSourceSwitchIntent: AppIntent {
-    private static let logger = Logger(subsystem: "com.mediawidget.app", category: "WidgetSourceSwitch")
     static let title: LocalizedStringResource = "切换播放源"
-    static let description = IntentDescription("在小组件上循环切换要控制的播放源")
+    static let description = IntentDescription("打开可用播放源列表")
     static let isDiscoverable = false
-    @available(macOS 26, *)
-    static var supportedModes: IntentModes { .background }
-
-    init() {}
 
     func perform() async throws -> some IntentResult {
-        let store = SharedDefaults.shared
-        guard let snapshot = store.snapshot(), snapshot.isFresh, snapshot.sources.count > 1 || !snapshot.preferredSource.isEmpty else {
-            Self.logger.notice("Source switch ignored because no fresh source list is available")
-            store.requestWidgetReload()
-            return .result()
-        }
-        // Advance against the latest selection in the app, so queued taps do
-        // not compute the same target from a shared, potentially stale snapshot.
-        try store.enqueue(WidgetCommand(id: UUID(), sourceID: "", itemID: nil, action: .selectSource, issuedAt: .now))
-        for _ in 0..<14 {
-            if store.snapshot()?.preferredSource != snapshot.preferredSource { break }
-            try await Task.sleep(for: .milliseconds(250))
-        }
+        try SharedDefaults.shared.enqueue(WidgetCommand(id: UUID(), sourceID: "", itemID: nil,
+                                                        action: .selectSource, issuedAt: .now))
         return .result()
-    }
-
-    static func nextSource(after current: String, in sources: [String]) -> String {
-        let cycle = [""] + sources
-        let index = cycle.firstIndex(of: current) ?? 0
-        return cycle[(index + 1) % cycle.count]
     }
 }

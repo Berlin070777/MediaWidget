@@ -3,18 +3,6 @@ import SwiftUI
 import WidgetKit
 
 enum WidgetSourceStyle {
-    static func icon(for bundleID: String) -> String {
-        switch bundleID {
-        case Constants.KnownApp.neteaseMusic: "music.note"
-        case Constants.KnownApp.bilibili: "play.tv.fill"
-        case Constants.KnownApp.safari: "safari.fill"
-        case Constants.KnownApp.chrome: "globe.americas.fill"
-        case Constants.KnownApp.appleMusic: "music.mic"
-        case Constants.KnownApp.spotify: "dot.radiowaves.left.and.right"
-        default: "app.fill"
-        }
-    }
-
     static func shortName(_ name: String) -> String {
         name.components(separatedBy: " · ").first ?? name
     }

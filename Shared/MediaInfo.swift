@@ -65,6 +65,18 @@ struct MediaInfo: Codable, Sendable, Hashable, Identifiable {
         }
     }
 
+    var sourceSymbol: String {
+        switch bundleID {
+        case Constants.KnownApp.neteaseMusic: "music.note"
+        case Constants.KnownApp.bilibili: "play.tv.fill"
+        case Constants.KnownApp.safari: "safari.fill"
+        case Constants.KnownApp.chrome: "globe.americas.fill"
+        case Constants.KnownApp.appleMusic: "music.mic"
+        case Constants.KnownApp.spotify: "dot.radiowaves.left.and.right"
+        default: "app.fill"
+        }
+    }
+
     func position(at date: Date = .now) -> TimeInterval? {
         guard let currentPosition, currentPosition.isFinite else { return nil }
         let elapsed = isPlaying ? max(0, date.timeIntervalSince(lastUpdated)) * playbackRate : 0

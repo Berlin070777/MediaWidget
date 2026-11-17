@@ -43,7 +43,8 @@ actor MediaController {
             return BrowserBridge.send(action, to: media, value: value)
         }
         if media.bundleID == Constants.KnownApp.bilibili {
-            return bilibili.perform(action, itemID: media.itemID)
+            guard let pid else { return false }
+            return await bilibili.perform(action, itemID: media.itemID, pid: pid)
         }
         guard media.bundleID == Constants.KnownApp.neteaseMusic, let pid else { return false }
         if action == .seek, let value, let itemID = media.itemID, let duration = media.duration {

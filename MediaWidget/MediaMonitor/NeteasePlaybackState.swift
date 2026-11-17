@@ -1,13 +1,14 @@
 import CommonCrypto
 import Foundation
 
-/// Reads the current track and saved position from the player’s Local Storage journal.
+/// Reads the player’s local playback state without opening or locking its LevelDB database.
 final class NeteasePlaybackState {
     private static let journalPath = "CEFCache/Local Storage/leveldb"
-    private static let recordKey = Data([31] + Array("_orpheus://orpheus\0\u{1}lastPlaying".utf8))
-    // Fixed encoding key for this local playback record format.
     private static let stateKey = Data(")(13daqP@ssw0rd~".utf8)
-    private static let readLimit = 128 * 1_024
+    private static let blockSize = 32_768
+    private static let readLimit = 512 * 1_024
+    private static let playbackKey = storageKey("lastPlaying")
+    private static let metadataKey = storageKey("playingInfo")
 
     private struct Journal: Equatable {
         let url: URL
@@ -22,51 +23,142 @@ final class NeteasePlaybackState {
 
     private var journal: Journal?
     private var sample: Sample?
+    private var metadataValue: Data?
+    private var tracks: [NeteaseTrack] = []
+
+    // The two records can be written in different batches when the song changes.
+    var currentTrack: NeteaseTrack? {
+        guard let sample else { return nil }
+        let matched = tracks.filter { $0.identity.id == sample.trackID }
+        return matched.first { $0.artworkURL != nil } ?? matched.first
+    }
 
     func read(in directory: URL) -> Sample? {
         let root = directory.appending(path: Self.journalPath, directoryHint: .isDirectory)
         let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
-        guard let urls = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys)),
-              let newest = urls.filter({ $0.pathExtension == "log" && Int($0.deletingPathExtension().lastPathComponent) != nil })
-                .max(by: { $0.lastPathComponent < $1.lastPathComponent }),
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys)) else {
+            return nil
+        }
+        let logs = urls.filter {
+            $0.pathExtension == "log" && Int($0.deletingPathExtension().lastPathComponent) != nil
+        }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        guard let newest = logs.first,
               let values = try? newest.resourceValues(forKeys: keys), values.isRegularFile == true,
-              let size = values.fileSize, size > 0, let modified = values.contentModificationDate else { return nil }
+              let size = values.fileSize, let modified = values.contentModificationDate else { return nil }
 
         let current = Journal(url: newest, size: size, modified: modified)
         if current == journal { return sample }
-        guard let handle = try? FileHandle(forReadingFrom: newest) else { return nil }
-        defer { try? handle.close() }
-        let start = max(size - Self.readLimit, 0)
-        guard (try? handle.seek(toOffset: UInt64(start))) != nil,
-              let bytes = try? handle.read(upToCount: size - start) else { return nil }
+        guard var records = Self.readRecords(newest, size: size) else { return nil }
+        if journal?.url != newest, (records[Self.playbackKey] == nil || records[Self.metadataKey] == nil),
+           let older = logs.dropFirst().first,
+           let olderValues = try? older.resourceValues(forKeys: keys), olderValues.isRegularFile == true,
+           let olderSize = olderValues.fileSize,
+           let previous = Self.readRecords(older, size: olderSize) {
+            records.merge(previous) { currentValue, _ in currentValue }
+        }
+
         journal = current
-        sample = Self.sample(in: bytes)
+        if let value = records[Self.playbackKey] { sample = Self.decodeSample(value) }
+        if let value = records[Self.metadataKey], value != metadataValue {
+            metadataValue = value
+            tracks = Self.decodeTracks(value)
+        }
         return sample
     }
 
-    static func sample(in bytes: Data) -> Sample? {
-        var end = bytes.endIndex
-        while let record = bytes.range(of: recordKey, options: .backwards, in: bytes.startIndex..<end) {
-            end = record.lowerBound
-            guard end > bytes.startIndex else { break }
-            switch bytes[end - 1] {
-            case 0: return nil  // LevelDB deletion of this key.
-            case 1:
-                let start = record.upperBound
-                guard start + 1 < bytes.endIndex else { return nil }
-                // The serialized value is a varint length followed by Chromium's
-                // one-byte string encoding marker and the player's Base64 payload.
-                let encodedLength = Int(bytes[start])
-                let extended = encodedLength >= 128
-                if extended && bytes[start + 1] >= 128 { return nil }
-                let length = extended ? (encodedLength & 127) + Int(bytes[start + 1]) * 128 : encodedLength
-                let value = start + (extended ? 2 : 1)
-                guard (65...1_025).contains(length), value + length <= bytes.endIndex,
-                      bytes[value] == 1,
-                      let decoded = Data(base64Encoded: bytes[(value + 1)..<(value + length)]),
-                      let playback = decode(decoded) else { return nil }
-                return playback
-            default: continue
+    private static func storageKey(_ name: String) -> Data {
+        Data(("_orpheus://orpheus\0\u{1}" + name).utf8)
+    }
+
+    private static func readRecords(_ file: URL, size: Int) -> [Data: Data]? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        let start = max(size - readLimit, 0) / blockSize * blockSize
+        guard (try? handle.seek(toOffset: UInt64(start))) != nil else { return nil }
+        if size == 0 { return [:] }
+        guard let bytes = try? handle.read(upToCount: size - start) else { return nil }
+        return records(in: bytes)
+    }
+
+    // LevelDB can split a WriteBatch across 32 KiB blocks. Reassemble it
+    // before decoding its values, and ignore a batch that is still being written.
+    private static func records(in bytes: Data) -> [Data: Data] {
+        var records: [Data: Data] = [:]
+        var offset = bytes.startIndex
+        var fragments: Data?
+        while offset + 7 <= bytes.endIndex {
+            let blockRemaining = blockSize - offset % blockSize
+            if blockRemaining < 7 {
+                offset += blockRemaining
+                continue
+            }
+            let length = Int(bytes[offset + 4]) | (Int(bytes[offset + 5]) << 8)
+            let type = bytes[offset + 6]
+            if type == 0 && length == 0 {
+                offset += blockRemaining
+                continue
+            }
+            let end = offset + 7 + length
+            guard length <= blockRemaining - 7, end <= bytes.endIndex else { break }
+            let payload = bytes[(offset + 7)..<end]
+            switch type {
+            case 1: // Full record
+                fragments = nil
+                collect(payload, into: &records)
+            case 2: // First fragment
+                fragments = Data(payload)
+            case 3: // Middle fragment
+                fragments?.append(payload)
+            case 4: // Last fragment
+                if var batch = fragments {
+                    fragments = nil
+                    batch.append(payload)
+                    collect(batch, into: &records)
+                }
+            default:
+                fragments = nil
+            }
+            offset = end
+        }
+        return records
+    }
+
+    private static func collect(_ batch: Data, into records: inout [Data: Data]) {
+        guard batch.count >= 12 else { return }
+        let header = batch.startIndex
+        let count = Int(batch[header + 8]) | (Int(batch[header + 9]) << 8)
+            | (Int(batch[header + 10]) << 16) | (Int(batch[header + 11]) << 24)
+        var index = header + 12
+        var updates: [Data: Data] = [:]
+        for _ in 0..<count {
+            guard index < batch.endIndex else { return }
+            let tag = batch[index]
+            index += 1
+            guard tag == 0 || tag == 1, let key = field(in: batch, index: &index) else { return }
+            var value = Data()
+            if tag == 1 {
+                guard let fieldValue = field(in: batch, index: &index) else { return }
+                value = fieldValue
+            }
+            if key == playbackKey || key == metadataKey { updates[key] = value }
+        }
+        guard index == batch.endIndex else { return }
+        // An empty value records a deletion and must supersede older data.
+        records.merge(updates) { _, newValue in newValue }
+    }
+
+    private static func field(in batch: Data, index: inout Int) -> Data? {
+        var length = 0
+        for shift in stride(from: 0, to: 35, by: 7) {
+            guard index < batch.endIndex else { return nil }
+            let byte = Int(batch[index])
+            index += 1
+            length |= (byte & 127) << shift
+            if byte < 128 {
+                guard length <= batch.endIndex - index else { return nil }
+                let start = index
+                index += length
+                return batch[start..<index]
             }
         }
         return nil
@@ -78,10 +170,30 @@ final class NeteasePlaybackState {
         let current: Double
     }
 
-    private static func decode(_ encrypted: Data) -> Sample? {
-        let blockSize = kCCBlockSizeAES128
-        guard !encrypted.isEmpty, encrypted.count.isMultiple(of: blockSize) else { return nil }
-        let capacity = encrypted.count + blockSize
+    private static func decodeSample(_ value: Data) -> Sample? {
+        guard let clear = decrypt(value), let state = try? JSONDecoder().decode(State.self, from: clear),
+              state.current.isFinite, (0..<1_000_000).contains(state.current),
+              let id = state.resourceId?.nonBlank ?? state.trackId?.nonBlank, id.count <= 40 else { return nil }
+        return Sample(trackID: id, position: state.current)
+    }
+
+    private static func decodeTracks(_ value: Data) -> [NeteaseTrack] {
+        guard let clear = decrypt(value),
+              let object = (try? JSONSerialization.jsonObject(with: clear)) as? [String: Any] else { return [] }
+        let playing = object["curPlaying"] as? [String: Any]
+        let candidates = [object["curTrack"], playing?["track"]]
+        return candidates.compactMap { candidate in
+            guard let metadata = candidate as? [String: Any],
+                  let id = (metadata["id"] as? String)?.nonBlank ?? (metadata["id"] as? NSNumber)?.stringValue,
+                  id.count <= 40 else { return nil }
+            return NeteaseTrack(id: id, metadata: metadata)
+        }
+    }
+
+    private static func decrypt(_ value: Data) -> Data? {
+        guard value.first == 1, let encrypted = Data(base64Encoded: value.dropFirst()),
+              !encrypted.isEmpty, encrypted.count.isMultiple(of: kCCBlockSizeAES128) else { return nil }
+        let capacity = encrypted.count + kCCBlockSizeAES128
         var clear = Data(count: capacity)
         var used = 0
         let status = clear.withUnsafeMutableBytes { output in
@@ -93,11 +205,7 @@ final class NeteasePlaybackState {
                 }
             }
         }
-        guard status == kCCSuccess, let state = try? JSONDecoder().decode(State.self, from: clear.prefix(used)),
-              state.current.isFinite, (0..<1_000_000).contains(state.current),
-              let id = state.resourceId?.nonBlank ?? state.trackId?.nonBlank,
-              id.count <= 40 else { return nil }
-        return Sample(trackID: id, position: state.current)
+        return status == kCCSuccess ? Data(clear.prefix(used)) : nil
     }
 }
 

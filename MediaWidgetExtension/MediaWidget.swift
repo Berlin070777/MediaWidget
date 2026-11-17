@@ -82,7 +82,7 @@ struct MediaWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("媒体控制")
-        .description("查看当前媒体，播放、暂停、切换曲目，并点按左上角胶囊切换播放源。")
+        .description("查看当前媒体，播放、暂停、切换曲目，并点按左上角来源按钮打开选择列表。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

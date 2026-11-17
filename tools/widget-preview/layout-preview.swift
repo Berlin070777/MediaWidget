@@ -131,12 +131,6 @@ func run() {
         render(entry: noArtEntry, family: .systemMedium, size: medium, dark: dark, name: "medium-noart-\(suffix)")
     }
 
-    check(WidgetSourceSwitchIntent.nextSource(after: "", in: ["a", "b"]) == "a", "cycle auto -> a")
-    check(WidgetSourceSwitchIntent.nextSource(after: "a", in: ["a", "b"]) == "b", "cycle a -> b")
-    check(WidgetSourceSwitchIntent.nextSource(after: "b", in: ["a", "b"]) == "", "cycle b -> auto")
-    check(WidgetSourceSwitchIntent.nextSource(after: "stale", in: ["a"]) == "a", "stale selection falls back to first")
-    check(WidgetSourceSwitchIntent.nextSource(after: "", in: ["a"]) == "a", "single source auto -> a")
-    check(WidgetSourceSwitchIntent.nextSource(after: "a", in: ["a"]) == "", "single source a -> auto")
 
     let legacyJSON = """
     {"media":{"sourceID":"x","bundleID":"b","sourceName":"n","title":"t","playbackState":"playing","playbackRate":1,"lastUpdated":0,"capabilities":1},"writtenAt":0,"showArtwork":true}

@@ -49,6 +49,17 @@ function sendNative(payload) {
     });
 }
 
+if (isSafari) {
+    browserAPI.tabs.onRemoved.addListener((tabID) => {
+        for (const [documentID, mappedTab] of safariTabs) {
+            if (mappedTab !== tabID) continue;
+            safariTabs.delete(documentID);
+            // Safari can tear down the content script before it reports pagehide.
+            void sendNative({ documentID, state: null }).catch(() => {});
+        }
+    });
+}
+
 browserAPI.runtime.onMessage.addListener((message, sender, reply) => {
     if (message?.type !== "mediawidget-state" || (sender.frameId != null && sender.frameId !== 0) ||
         !Number.isInteger(sender.tab?.id) || !/^[\da-f-]{36}$/i.test(message.documentID)) return false;
