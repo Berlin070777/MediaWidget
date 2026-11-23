@@ -10,5 +10,6 @@ import SwiftUI
 struct MediaWidgetBundle: WidgetBundle {
     var body: some Widget {
         MediaWidget()
+        AlbumWallWidget()
     }
 }

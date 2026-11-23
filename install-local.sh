@@ -2,6 +2,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+background_launch=false
+if [[ $# -eq 1 && "$1" == "--background" ]]; then
+    background_launch=true
+elif [[ $# -ne 0 ]]; then
+    printf 'Usage: %s [--background]\n' "$0" >&2
+    exit 2
+fi
+
 source_app="$PWD/build/Build/Products/Release/MediaWidget.app"
 target=/Applications/MediaWidget.app
 backup_root="$HOME/Library/Application Support/MediaWidget"
@@ -51,7 +59,7 @@ if [[ -d "$target" ]]; then mv "$target" "$backup/MediaWidget.app"; fi
 if ! mv "$incoming/MediaWidget.app" "$target"; then
     if [[ -d "$backup/MediaWidget.app" ]]; then
         mv "$backup/MediaWidget.app" "$target"
-        open "$target"
+        if ! "$background_launch"; then open "$target"; fi
     fi
     exit 1
 fi
@@ -64,11 +72,17 @@ for extension in "${extensions[@]}"; do
     # Cover an extension launch racing the replacement.
     stop_executable "$target/Contents/PlugIns/$extension.appex/Contents/MacOS/$extension"
 done
-open "$target"
+if "$background_launch"; then
+    open -g "$target" --args --background
+else
+    open "$target"
+fi
 printf 'Installed %s\n' "$target"
 if [[ -d "$backup/MediaWidget.app" ]]; then
     printf 'Previous app: %s\n' "$backup/MediaWidget.app"
     # Notification Center can retain a failed extension lookup from the
     # replacement window. The per-user agent relaunches with fresh metadata.
-    stop_executable /System/Library/CoreServices/NotificationCenter.app/Contents/MacOS/NotificationCenter
+    if ! "$background_launch"; then
+        stop_executable /System/Library/CoreServices/NotificationCenter.app/Contents/MacOS/NotificationCenter
+    fi
 fi

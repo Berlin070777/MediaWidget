@@ -10,8 +10,8 @@ settings:
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
     MEDIA_WIDGET_APP_GROUP: ""
-    MARKETING_VERSION: "1.3.8"
-    CURRENT_PROJECT_VERSION: "20"
+    MARKETING_VERSION: "1.5.12"
+    CURRENT_PROJECT_VERSION: "37"
 
 targets:
   MediaWidget:
@@ -26,6 +26,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mediawidget.app
         PRODUCT_MODULE_NAME: MediaWidgetApp
         INFOPLIST_FILE: MediaWidget/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: MediaWidget/MediaWidget$(MEDIA_WIDGET_ENTITLEMENT_SUFFIX).entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
     dependencies:

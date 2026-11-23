@@ -6,7 +6,7 @@ enum WidgetPlaybackAction: String, AppEnum {
     case play, pause, next, previous, activate, openPanel
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "媒体操作"
     static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
-        .play: "播放", .pause: "暂停", .next: "下一项", .previous: "上一项", .activate: "打开来源", .openPanel: "打开进度面板"
+        .play: "播放", .pause: "暂停", .next: "下一项", .previous: "上一项", .activate: "打开来源", .openPanel: "打开媒体控制"
     ]
 }
 

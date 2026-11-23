@@ -2,7 +2,8 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var monitor: MediaMonitor
-    let showPanel: () -> Void
+    let showPlayer: () -> Void
+    let showAlbumWall: () -> Void
     let showSettings: () -> Void
     @State private var isChoosingSource = false
 
@@ -11,9 +12,9 @@ struct MenuBarView: View {
             PlayerControls(monitor: monitor, artworkSize: 58, isChoosingSource: $isChoosingSource)
             Divider()
             HStack {
-                Button("悬浮面板", systemImage: "macwindow") {
-                    showPanel()
-                }
+                Button("打开媒体控制", systemImage: "macwindow", action: showPlayer)
+                Button("唱片墙", systemImage: "square.grid.2x2", action: showAlbumWall)
+                    .labelStyle(.titleAndIcon)
                 Spacer()
                 Button("设置", systemImage: "gearshape") { showSettings() }
                 Button("退出", systemImage: "power") { NSApp.terminate(nil) }

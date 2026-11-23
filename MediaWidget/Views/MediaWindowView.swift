@@ -3,31 +3,38 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class FloatingPanelNavigation {
+final class MediaWindowNavigation {
+    enum Page { case albums, player }
+
+    var page: Page = .albums
     var isChoosingSource = false
+    var isSearchingAlbums = false
+    var albumFocus: AlbumWallFocus?
 }
 
-struct FloatingPanelView: View {
-    @ObservedObject private var monitor = MediaMonitor.shared
-    @Bindable var navigation: FloatingPanelNavigation
-    let showSettings: () -> Void
+struct MediaWindowView: View {
+    @ObservedObject var monitor: MediaMonitor
+    @Bindable var navigation: MediaWindowNavigation
+    let input: AlbumWallInput
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("媒体控制")
-                    .font(.headline)
-                Spacer()
-                Button("设置", systemImage: "gearshape") { showSettings() }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
+        Group {
+            switch navigation.page {
+            case .albums:
+                AlbumWallView(monitor: monitor, library: AlbumWallStore.shared, input: input, navigation: navigation)
+            case .player:
+                ScrollView {
+                    PlayerControls(monitor: monitor, artworkSize: 88, isChoosingSource: $navigation.isChoosingSource,
+                                   usesGlass: true)
+                        .frame(maxWidth: 490)
+                        .padding(.horizontal, 34)
+                        .padding(.vertical, 20)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .frame(maxHeight: .infinity)
             }
-            PlayerControls(monitor: monitor, artworkSize: 76, isChoosingSource: $navigation.isChoosingSource)
-            Spacer(minLength: 0)
         }
-        .padding(EdgeInsets(top: 36, leading: 18, bottom: 14, trailing: 18))
-        .frame(minWidth: 320, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-        .onAppear { monitor.refreshNowPlaying() }
+        .background { MediaWindowBackdrop() }
     }
 }
 
@@ -35,8 +42,8 @@ struct PlayerControls: View {
     @ObservedObject var monitor: MediaMonitor
     let artworkSize: CGFloat
     @Binding var isChoosingSource: Bool
+    var usesGlass = false
 
-    @State private var seekPosition: Double?
     @State private var mediaVolume: Double?
     @State private var systemVolume: Double?
 
@@ -45,13 +52,15 @@ struct PlayerControls: View {
     var body: some View {
         if isChoosingSource {
             PlaybackSourcePicker(monitor: monitor, isPresented: $isChoosingSource)
+                .padding(usesGlass ? 16 : 0)
+                .mediaGlass(in: RoundedRectangle(cornerRadius: 21), enabled: usesGlass)
         } else {
             controls
         }
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: usesGlass ? 17 : 12) {
             Button {
                 clearDrafts()
                 isChoosingSource = true
@@ -69,10 +78,11 @@ struct PlayerControls: View {
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(.primary.opacity(0.07), in: .rect(cornerRadius: 8))
-                .contentShape(.rect(cornerRadius: 8))
+                .padding(.horizontal, usesGlass ? 14 : 10)
+                .frame(height: usesGlass ? 36 : 30)
+                .background(.primary.opacity(usesGlass ? 0 : 0.07), in: RoundedRectangle(cornerRadius: 8))
+                .mediaGlass(in: Capsule(), enabled: usesGlass)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("选择播放源")
@@ -89,7 +99,7 @@ struct PlayerControls: View {
                             ArtworkView(data: media.artworkData, size: artworkSize)
                         }
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(media.title).font(.headline).lineLimit(2)
+                            Text(media.title).font(usesGlass ? .title2.weight(.semibold) : .headline).lineLimit(2)
                             Text(media.artist ?? "作者不可用").foregroundStyle(.secondary).lineLimit(1)
                             if let album = media.album { Text(album).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
                             Text("\(media.sourceName) · \(media.stateLabel)")
@@ -98,24 +108,20 @@ struct PlayerControls: View {
                         Spacer(minLength: 0)
                         Image(systemName: "arrow.up.forward.app").foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, usesGlass ? 4 : 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("打开 \(media.sourceName)")
 
-                TimelineView(.periodic(from: .now, by: media.isPlaying && media.currentPosition != nil ? 1 : 3600)) { context in
-                    progress(position: media.position(at: context.date))
-                }
+                PlaybackProgress(media: media, seek: { monitor.seek($0, for: media) })
 
-                HStack(spacing: 24) {
-                    Spacer()
-                    control(.previous, "上一项", "backward.fill")
-                    control(media.playPauseCommand, media.isPlaying ? "暂停" : "播放",
-                            media.isPlaying ? "pause.circle.fill" : "play.circle.fill", size: 36)
-                    control(.next, "下一项", "forward.fill")
-                    Spacer()
-                }
+                PlaybackTransportControls(media: media, submit: { monitor.submit($0, for: media) })
+                    .padding(.horizontal, usesGlass ? 21 : 0)
+                    .padding(.vertical, usesGlass ? 7 : 0)
+                    .mediaGlass(in: Capsule(), enabled: usesGlass)
+                    .frame(maxWidth: .infinity)
 
                 volumeRow("媒体音量", value: media.volume, draft: $mediaVolume,
                           enabled: media.capabilities.contains(.canSetVolume)) { value in
@@ -145,44 +151,7 @@ struct PlayerControls: View {
     }
 
     private func clearDrafts() {
-        seekPosition = nil
         mediaVolume = nil
-    }
-
-    private func progress(position: Double?) -> some View {
-        VStack(spacing: 4) {
-            if let duration = media.duration, duration > 0, let position {
-                if media.capabilities.contains(.canSeek) {
-                    let target = media
-                    PlaybackScrubber(position: position, duration: duration) { draft in
-                        seekPosition = draft
-                    } commit: { value in
-                        seekPosition = nil
-                        monitor.seek(value, for: target)
-                    }
-                    .id(ScrubTarget(source: target.sourceID, item: target.itemID))
-                } else {
-                    ProgressView(value: position, total: duration)
-                }
-            }
-            HStack {
-                Text("进度 \(MediaInfo.formatTime(seekPosition ?? position))")
-                Spacer()
-                Text("时长 \(MediaInfo.formatTime(media.duration))")
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private func control(_ action: MediaCommand, _ title: String, _ icon: String, size: CGFloat = 17) -> some View {
-        Button { monitor.submit(action, for: media) } label: {
-            Image(systemName: icon).font(.system(size: size)).frame(minWidth: 24, minHeight: 24)
-        }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(title)
-        .help(title)
-        .disabled(!media.capabilities.contains(action.capability))
     }
 
     private func volumeRow(_ title: String, value: Float?, draft: Binding<Double?>,
@@ -207,9 +176,107 @@ struct PlayerControls: View {
     }
 }
 
+struct PlaybackTransportControls: View {
+    let media: MediaInfo
+    var compact = false
+    let submit: (MediaCommand) -> Void
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 18) {
+            control(.previous, title: "上一首", icon: "backward.end.fill")
+            control(media.playPauseCommand, title: media.isPlaying ? "暂停" : "播放",
+                    icon: media.isPlaying ? "pause.circle.fill" : "play.circle.fill", primary: true)
+            control(.next, title: "下一首", icon: "forward.end.fill")
+        }
+        .fixedSize()
+    }
+
+    private func control(_ action: MediaCommand, title: String, icon: String, primary: Bool = false) -> some View {
+        let symbolSize: CGFloat = primary ? (compact ? 24 : 36) : (compact ? 13 : 17)
+        return Button {
+            submit(action)
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: symbolSize))
+                .frame(minWidth: compact ? 30 : 24, minHeight: compact ? 32 : 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(title)
+        .help(title)
+        .disabled(!media.capabilities.contains(action.capability))
+    }
+}
+
+struct PlaybackProgress: View {
+    let media: MediaInfo
+    var compact = false
+    let seek: (TimeInterval) -> Void
+
+    var body: some View {
+        PlaybackProgressTrack(media: media, compact: compact, seek: seek)
+            .id(ScrubTarget(source: media.sourceID, item: media.itemID, title: media.title))
+    }
+}
+
+private struct PlaybackProgressTrack: View {
+    let media: MediaInfo
+    let compact: Bool
+    let seek: (TimeInterval) -> Void
+    @State private var draft: TimeInterval?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: media.isPlaying && media.currentPosition != nil ? 1 : 3600)) { context in
+            let position = media.position(at: context.date)
+            if compact {
+                HStack(spacing: 12) {
+                    Text(MediaInfo.formatTime(draft ?? position))
+                    track(position: position)
+                    Text(MediaInfo.formatTime(media.duration))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 4) {
+                    track(position: position)
+                    HStack {
+                        Text("进度 \(MediaInfo.formatTime(draft ?? position))")
+                        Spacer()
+                        Text("时长 \(MediaInfo.formatTime(media.duration))")
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func track(position: TimeInterval?) -> some View {
+        if let duration = media.duration, duration.isFinite, duration > 0, let position, position.isFinite {
+            if media.capabilities.contains(.canSeek) {
+                PlaybackScrubber(position: position, duration: duration) { draft = $0 } commit: { value in
+                    draft = nil
+                    seek(value)
+                }
+            } else {
+                ProgressView(value: position, total: duration)
+                    .tint(.secondary)
+                    .accessibilityLabel("播放进度")
+            }
+        } else if compact {
+            Capsule()
+                .fill(.secondary.opacity(0.21))
+                .frame(height: 3)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("播放进度不可用")
+        }
+    }
+}
+
 private struct ScrubTarget: Hashable {
     let source: String
     let item: String?
+    let title: String
 }
 
 private struct PlaybackScrubber: NSViewRepresentable {

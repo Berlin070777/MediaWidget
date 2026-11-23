@@ -38,6 +38,10 @@ actor MediaController {
 
     func retryNeteaseDatabaseAccess() { netease.retryDatabaseAccess() }
 
+    func albumCatalog(for album: WallAlbum) -> AlbumWallCatalog {
+        netease.albumCatalog(for: album)
+    }
+
     func perform(_ action: MediaCommand, media: MediaInfo, pid: pid_t?, value: Double?) async -> Bool {
         if BrowserKind.kind(for: media.sourceID) != nil {
             return BrowserBridge.send(action, to: media, value: value)

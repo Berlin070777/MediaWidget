@@ -5,7 +5,6 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var monitor: MediaMonitor
 
-    @AppStorage("showInDock") private var showInDock = false
     @AppStorage("showArtwork") private var showArtwork = true
     @AppStorage("downloadArtwork") private var downloadArtwork = true
     @AppStorage("reducePolling") private var reducePolling = false
@@ -42,16 +41,13 @@ struct SettingsView: View {
                         if new != (SMAppService.mainApp.status == .enabled) { setLaunchAtLogin(new) }
                     }
                 if let loginError { Text(loginError).foregroundStyle(.red).font(.caption) }
-                Toggle("在程序坞中显示图标", isOn: $showInDock)
-                    .onChange(of: showInDock) { NSApp.setActivationPolicy(showInDock ? .regular : .accessory) }
-                LabeledContent("显示或隐藏悬浮面板", value: "⌘ ⇧ M")
             }
             Section("封面与刷新") {
                 Toggle("显示封面", isOn: $showArtwork).onChange(of: showArtwork) { monitor.refreshNowPlaying() }
                 Toggle("允许从媒体站点下载封面", isOn: $downloadArtwork)
                     .disabled(!showArtwork)
                     .onChange(of: downloadArtwork) { monitor.refreshNowPlaying() }
-                Text("按需从内容站点获取封面。B 站客户端使用视频编号查图，播放状态保存在本机。")
+                Text("B 站按视频编号查图。翻到唱片背面时，按专辑名和艺人向 MusicBrainz 查图，也会使用已核实的公开图源。播放状态保存在本机。")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("降低客户端检测频率", isOn: $reducePolling)
                     .onChange(of: reducePolling) { monitor.refreshNowPlaying() }

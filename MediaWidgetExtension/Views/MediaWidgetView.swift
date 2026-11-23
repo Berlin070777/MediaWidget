@@ -218,7 +218,7 @@ struct MediaWidgetView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("打开面板调整进度")
-        .accessibilityHint("在悬浮面板拖动进度")
+        .accessibilityHint("在媒体控制页拖动进度")
     }
 
     @ViewBuilder

@@ -15,6 +15,7 @@ struct NeteaseTrack {
     let title: String?
     let artist: String?
     let album: String?
+    let albumID: String?
     let duration: TimeInterval?
     let artworkURL: URL?
 
@@ -27,6 +28,9 @@ struct NeteaseTrack {
         artist = artists?.compactMap { ($0["name"] as? String)?.nonBlank }.joined(separator: " / ").nonBlank
         let albumMetadata = (metadata["album"] ?? metadata["al"]) as? [String: Any]
         album = (albumMetadata?["name"] as? String)?.nonBlank
+        let rawAlbumID = albumMetadata?["id"]
+        let identifier = (rawAlbumID as? String)?.nonBlank ?? (rawAlbumID as? NSNumber)?.stringValue
+        albumID = identifier.flatMap { Int64($0).map { $0 > 0 } == true ? $0 : nil }
         var cover = (albumMetadata?["picUrl"] as? String)?.nonBlank.flatMap { URLComponents(string: $0) }
         if cover?.scheme == "http" { cover?.scheme = "https" }
         artworkURL = cover?.url
@@ -81,15 +85,47 @@ enum NeteaseTrackDatabase {
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { return .track(nil) }
         guard result == SQLITE_ROW else { return .failed(status(for: result, connection: connection)) }
-        guard let id = sqlite3_column_text(statement, 0), let json = sqlite3_column_text(statement, 2),
-              let object = (try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8))) as? [String: Any],
-              let identifier = String(cString: id).nonBlank else { return .failed(.unsupported) }
-        let playtime = sqlite3_column_int64(statement, 1)
-        guard playtime > 0 else { return .failed(.unsupported) }
-        return .track(NeteaseTrack(id: identifier, startedAt: Date(timeIntervalSince1970: Double(playtime) / 1_000),
-                                   metadata: object))
+        guard let statement, let track = decodeRow(statement) else { return .failed(.unsupported) }
+        return .track(track)
     }
 
+    // Read only when someone opens an album. Existing wall entries use the
+    // title to narrow the query, then match the album fingerprint in Swift.
+    static func albumTracks(in directory: URL, id: String?, title: String) -> [NeteaseTrack] {
+        let url = directory.appending(path: fileName)
+        var connection: OpaquePointer?
+        defer { sqlite3_close(connection) }
+        guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let connection else { return [] }
+        let field = id == nil ? "name" : "id"
+        let query = """
+            SELECT id, playtime, jsonStr FROM historyTracks
+            WHERE CASE WHEN json_valid(jsonStr) THEN
+                CAST(COALESCE(json_extract(jsonStr, '$.album.\(field)'), json_extract(jsonStr, '$.al.\(field)')) AS TEXT) = ?1
+            ELSE 0 END
+            ORDER BY playtime DESC LIMIT 400
+            """
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(connection, query, -1, &statement, nil) == SQLITE_OK, let statement,
+              sqlite3_bind_text(statement, 1, id ?? title, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) == SQLITE_OK
+        else { return [] }
+        var tracks: [NeteaseTrack] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if Task.isCancelled { break }
+            if let track = decodeRow(statement) { tracks.append(track) }
+        }
+        return tracks
+    }
+
+    private static func decodeRow(_ statement: OpaquePointer) -> NeteaseTrack? {
+        guard let id = sqlite3_column_text(statement, 0), let json = sqlite3_column_text(statement, 2),
+              let object = (try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8))) as? [String: Any],
+              let identifier = String(cString: id).nonBlank else { return nil }
+        let playtime = sqlite3_column_int64(statement, 1)
+        guard playtime > 0 else { return nil }
+        return NeteaseTrack(id: identifier, startedAt: Date(timeIntervalSince1970: Double(playtime) / 1_000), metadata: object)
+    }
     private static func status(for result: Int32, connection: OpaquePointer?) -> NeteaseDatabaseStatus {
         if let connection, [EACCES, EPERM].contains(sqlite3_system_errno(connection)) { return .permissionRequired }
         switch result {

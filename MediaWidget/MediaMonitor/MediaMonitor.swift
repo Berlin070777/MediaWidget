@@ -16,11 +16,12 @@ final class MediaMonitor: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var preferredSource = ""
     @Published private(set) var isMonitoring = false
+    @Published private(set) var requestingAlbumPlayback = false
 
     private let controller = MediaController()
     private let store = SharedDefaults.shared
     private var timer: Timer?
-    private var showPanel: (() -> Void)?
+    private var showPlayer: (() -> Void)?
     private var showSources: (() -> Void)?
     private var refreshTask: Task<Void, Never>?
     private var refreshAgain = false
@@ -35,9 +36,9 @@ final class MediaMonitor: ObservableObject {
 
     var showArtwork: Bool { UserDefaults.standard.object(forKey: "showArtwork") as? Bool ?? true }
 
-    func startMonitoring(showPanel: @escaping () -> Void, showSources: @escaping () -> Void) {
+    func startMonitoring(showPlayer: @escaping () -> Void, showSources: @escaping () -> Void) {
         guard !isMonitoring else { return }
-        self.showPanel = showPanel
+        self.showPlayer = showPlayer
         self.showSources = showSources
         isMonitoring = true
         let workspace = NSWorkspace.shared.notificationCenter
@@ -72,8 +73,9 @@ final class MediaMonitor: ObservableObject {
 
     func stopMonitoring() {
         isMonitoring = false
-        showPanel = nil
+        showPlayer = nil
         showSources = nil
+        AlbumWallStore.shared.observe([], recordHistory: false)
         timer?.invalidate()
         timer = nil
         refreshTask?.cancel()
@@ -130,6 +132,8 @@ final class MediaMonitor: ObservableObject {
 
             let ordered = sources.sorted(by: sourceOrder)
             if allSources != ordered { allSources = ordered }
+            let historyEnabled = UserDefaults.standard.object(forKey: AlbumWallStore.historyPreference) as? Bool ?? true
+            AlbumWallStore.shared.observe(ordered, recordHistory: historyEnabled, showArtwork: showArtwork)
             if !preferredSource.isEmpty && !allSources.contains(where: { $0.sourceID == preferredSource }) {
                 preferredSource = ""
             }
@@ -151,6 +155,26 @@ final class MediaMonitor: ObservableObject {
     func retryNeteaseDatabaseAccess() async {
         await controller.retryNeteaseDatabaseAccess()
         refreshNowPlaying()
+    }
+
+    func albumCatalog(for album: WallAlbum) async -> AlbumWallCatalog {
+        await controller.albumCatalog(for: album)
+    }
+
+    func playNetease(_ target: NeteaseAlbumPlayback.Target) async -> String? {
+        guard !requestingAlbumPlayback else { return "正在确认上一条播放请求。" }
+        requestingAlbumPlayback = true
+        defer { requestingAlbumPlayback = false }
+        return await NeteaseAlbumPlayback.play(target) {
+            let delivered = Date.now
+            for _ in 0..<20 {
+                if Task.isCancelled { return false }
+                refreshNowPlaying()
+                if allSources.contains(where: { $0.lastUpdated >= delivered && target.matches($0) }) { return true }
+                try? await Task.sleep(for: .milliseconds(325))
+            }
+            return false
+        }
     }
 
     @discardableResult
@@ -244,8 +268,8 @@ final class MediaMonitor: ObservableObject {
         guard isMonitoring, !sleeping else { return }
         for command in store.takeCommands() {
             if command.action == .openPanel {
-                Self.logger.notice("Opening the media panel from the widget")
-                showPanel?()
+                Self.logger.notice("Opening media controls from the widget")
+                showPlayer?()
                 continue
             }
             if command.action == .selectSource {

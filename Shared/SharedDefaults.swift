@@ -47,6 +47,12 @@ struct WidgetCommand: Codable {
     let issuedAt: Date
 }
 
+struct WidgetAlbum: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let thumbnail: Data
+}
+
 struct SharedDefaults: Sendable {
     static let shared = SharedDefaults()
     let groupURL: URL?
@@ -77,6 +83,15 @@ struct SharedDefaults: Sendable {
         Self.read(WidgetSnapshot.self, from: directory.appending(path: "Snapshot-v2.json"))
     }
 
+    func saveAlbumPreview(_ albums: [WidgetAlbum]) throws {
+        try Self.write(albums, to: albumPreviewFile)
+        WidgetCenter.shared.reloadTimelines(ofKind: Constants.albumWallWidgetKind)
+    }
+
+    func albumPreview() -> [WidgetAlbum]? {
+        Self.read([WidgetAlbum].self, from: albumPreviewFile)
+    }
+
     func enqueue(_ command: WidgetCommand) throws {
         try Self.write(command, to: commandDirectory.appending(path: "\(command.id.uuidString).json"))
         CFNotificationCenterPostNotification(
@@ -101,6 +116,7 @@ struct SharedDefaults: Sendable {
     }
 
     private var commandDirectory: URL { directory.appending(path: "WidgetCommands") }
+    private var albumPreviewFile: URL { directory.appending(path: "AlbumPreview-v1.json") }
 
     static func write<T: Encodable>(_ value: T, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

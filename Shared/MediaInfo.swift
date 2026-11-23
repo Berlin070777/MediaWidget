@@ -44,6 +44,7 @@ struct MediaInfo: Codable, Sendable, Hashable, Identifiable {
     var title: String
     var artist: String? = nil
     var album: String? = nil
+    var albumID: String? = nil
     var artworkData: Data? = nil
     var duration: TimeInterval? = nil
     var currentPosition: TimeInterval? = nil

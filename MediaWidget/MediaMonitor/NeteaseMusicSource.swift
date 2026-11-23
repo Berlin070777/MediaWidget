@@ -90,6 +90,7 @@ final class NeteaseMusicSource {
         return MediaInfo(
             sourceID: bundleID, bundleID: bundleID, sourceName: "网易云音乐", itemID: track?.identity.id,
             title: track?.title ?? "曲目信息不可用", artist: track?.artist, album: track?.album,
+            albumID: track?.albumID,
             duration: track?.duration, currentPosition: position, playbackState: state,
             capabilities: capabilities, lastUpdated: now
         )
@@ -135,6 +136,20 @@ final class NeteaseMusicSource {
     }
 
     var artworkURL: URL? { confirmedTrack?.artworkURL }
+
+    func albumCatalog(for album: WallAlbum) -> AlbumWallCatalog {
+        var catalog = AlbumWallCatalog(albumID: album.neteaseAlbumID)
+        guard album.isNetease, syncDatabaseAccess(), databaseStatus != .permissionRequired else { return catalog }
+        var tracks = withStorageAccess { NeteaseTrackDatabase.albumTracks(in: $0, id: catalog.albumID, title: album.title) }
+        if let confirmedTrack { tracks.insert(confirmedTrack, at: 0) }
+        for track in tracks where album.matches(track) {
+            if let id = catalog.albumID, let trackAlbumID = track.albumID, id != trackAlbumID { continue }
+            if catalog.albumID == nil { catalog.albumID = track.albumID }
+            guard let title = track.title, let id = Int64(track.identity.id), id > 0 else { continue }
+            catalog.include(.init(id: track.identity.id, title: title, artist: track.artist, duration: track.duration))
+        }
+        return catalog
+    }
 
     private func menu(_ pid: pid_t) -> [AXUIElement]? {
         let ax = AccessibilityMedia.application(pid)
@@ -209,7 +224,7 @@ final class NeteaseMusicSource {
         }
     }
 
-    private func refreshTrack() {
+    private func syncDatabaseAccess() -> Bool {
         let storedBookmark = UserDefaults.standard.data(forKey: Self.folderBookmarkKey)
         guard storedBookmark != nil || UserDefaults.standard.bool(forKey: Self.accessRequestedKey) else {
             if databaseStatus != .notConnected {
@@ -218,7 +233,7 @@ final class NeteaseMusicSource {
                 clearTrack()
                 databaseStatus = .notConnected
             }
-            return
+            return false
         }
         if storedBookmark != bookmark {
             bookmark = storedBookmark
@@ -233,6 +248,11 @@ final class NeteaseMusicSource {
                                  relativeTo: nil, bookmarkDataIsStale: &stale))
             }
         }
+        return true
+    }
+
+    private func refreshTrack() {
+        guard syncDatabaseAccess() else { return }
         // macOS remembers a denied request. Let the person retry once the
         // setting changes, without polling the protected file in the meantime.
         guard databaseStatus != .permissionRequired else { return }
